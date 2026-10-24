@@ -351,3 +351,17 @@ def test_a_cached_extract_without_an_index_is_indexed_without_asking(
     assert code == 0, output
     assert "Download" not in output
     assert "Roads:    4 major, 3 mid, 4 minor" in output
+
+
+def test_max_speed_sets_the_speed_above_which_a_jump_is_implausible(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, map_cache: Path
+) -> None:
+    source = ride_on_the_fixture_roads(tmp_path, monkeypatch)
+
+    _, by_default = inspect(source, input="n\n")
+    code, output = inspect(source, "--max-speed", "50", input="n\n")
+
+    assert "Valid:    2 of 2" in by_default
+    assert code == 0, output
+    assert "Valid:    1 of 2" in output
+    assert "implausible_jump" in output

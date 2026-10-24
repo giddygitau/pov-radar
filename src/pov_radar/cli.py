@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from pov_radar import maps
 from pov_radar.chapter import ChapterError, read_ride
 from pov_radar.recording import DiscoveryError, Recording, discover
-from pov_radar.ride import KMH_PER_MS, Ride, join
+from pov_radar.ride import KMH_PER_MS, MAX_SPEED, Ride, join
 from pov_radar.roads import MapData, RoadClass
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
@@ -60,6 +60,10 @@ def inspect(
             "[default: pov-radar/<recording>/ beside the source]"
         ),
     ] = None,
+    max_speed: Annotated[
+        float,
+        typer.Option(help="Km/h faster than which the motorcycle can't have moved between Samples", min=0),
+    ] = MAX_SPEED * KMH_PER_MS,
 ) -> None:
     """Summarise each Ride's GPS telemetry and write its telemetry.json."""
     try:
@@ -79,19 +83,19 @@ def inspect(
             folder = recording.chapters[0].parent / "pov-radar" / recording.name
         else:
             folder = out / recording.name if len(recordings) > 1 else out
-        failed |= not _inspect(recording, folder, map_data)
+        failed |= not _inspect(recording, folder, map_data, max_speed / KMH_PER_MS)
     if failed:
         raise typer.Exit(1)
 
 
-def _inspect(recording: Recording, out: Path, map_data: Callable[[], MapData | None]) -> bool:
-    """Report one Ride and write its telemetry; False if it couldn't be."""
+def _inspect(recording: Recording, out: Path, map_data: Callable[[], MapData | None], max_speed: float) -> bool:
+    """Report one Ride and write its telemetry, `max_speed` in metres per second; False if it couldn't be."""
     typer.echo(f"{recording.name}: {', '.join(path.name for path in recording.chapters)}")
     if recording.missing:
         plural = "s" if len(recording.missing) > 1 else ""
         typer.echo(f"Warning: {recording.name} is missing chapter{plural} {_ranges(recording.missing)}", err=True)
     try:
-        ride = join([read_ride(path) for path in recording.chapters])
+        ride = join([read_ride(path) for path in recording.chapters], max_speed)
     except ChapterError as error:
         typer.echo(f"Error: {error}", err=True)
         return False
