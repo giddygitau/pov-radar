@@ -42,7 +42,8 @@ EXIFTOOL_ARGS = ["-a", "-ee", "-G3", "-n", "-s", "-api", "LargeFileSupport=1"] +
 ]
 """The exiftool arguments, before the file path, whose output `parse_ride` reads."""
 
-_LINE = re.compile(r"^\[Doc(\d+)\]\s+(\w+)\s*:\s*(.*)$")
+_LINE = re.compile(r"^\[Doc(\d+)(?:-\d+)?\]\s+(\w+)\s*:\s*(.*)$")
+"""One tag value from payload N, labelled `[DocN]` or, from exiftool 13.55, `[DocN-row]` per GPS row."""
 
 
 def parse_ride(text: str, duration: float) -> Ride:
@@ -52,6 +53,8 @@ def parse_ride(text: str, duration: float) -> Ride:
         if match := _LINE.match(line):
             doc, tag, value = match.groups()
             payloads[int(doc)][tag].append(value.strip())
+        elif line.startswith("[Doc"):
+            raise TelemetryError(f"Unrecognised exiftool line: {line.strip()}")
 
     samples: list[Sample] = []
     for doc in sorted(payloads):

@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from typing import Literal
 
 import pytest
 
@@ -19,12 +20,23 @@ class Payload:
     columns: dict[str, list[float]] = field(default_factory=dict[str, list[float]])
 
 
-def exiftool_text(*payloads: Payload) -> str:
-    """Mimics `exiftool -a -ee -G3 -n -s <tags>`: grouped by tag, then by payload."""
+RowLabels = Literal["shared", "numbered"]
+
+
+def exiftool_text(*payloads: Payload, row_labels: RowLabels = "numbered") -> str:
+    """Mimics `exiftool -a -ee -G3 -n -s <tags>`: grouped by tag, then by payload.
+
+    exiftool 13.30 labels every GPS row of payload 1 `[Doc1]` ("shared"); 13.55 labels them
+    `[Doc1]`, `[Doc1-1]`, `[Doc1-2]`, … ("numbered").
+    """
     lines: list[str] = []
 
     def emit(name: str, values: list[tuple[int, object]]) -> None:
-        lines.extend(f"[Doc{doc}]          {name:<32}: {value}" for doc, value in values)
+        row = 0
+        for i, (doc, value) in enumerate(values):
+            row = row + 1 if i and values[i - 1][0] == doc else 0
+            label = f"Doc{doc}-{row}" if row and row_labels == "numbered" else f"Doc{doc}"
+            lines.append(f"[{label}]{'':<10}{name:<32}: {value}")
 
     def scalar(name: str, attr: str) -> None:
         emit(name, [(d, getattr(p, attr)) for d, p in enumerate(payloads, 1) if getattr(p, attr) is not None])
@@ -48,10 +60,12 @@ def exiftool_text(*payloads: Payload) -> str:
 ROW = (-0.7, 36.9, 1746.0, 36.0)
 
 
-def test_samples_are_spread_evenly_across_their_payload() -> None:
+@pytest.mark.parametrize("row_labels", ["shared", "numbered"])
+def test_samples_are_spread_evenly_across_their_payload(row_labels: RowLabels) -> None:
     text = exiftool_text(
         Payload(sample_time=0.0, sample_duration=1.0, gps=[ROW] * 4),
         Payload(sample_time=1.0, sample_duration=0.5, gps=[ROW] * 2),
+        row_labels=row_labels,
     )
 
     ride = parse_ride(text, duration=1.5)
@@ -102,3 +116,10 @@ def test_a_payload_with_unequal_gps_columns_is_an_error(short_column: str) -> No
 
     with pytest.raises(TelemetryError, match="payload 1 has unequal GPS columns"):
         parse_ride(exiftool_text(broken), duration=1.0)
+
+
+def test_an_unrecognised_payload_label_is_an_error_not_skipped() -> None:
+    text = exiftool_text(Payload(gps=[ROW] * 2)) + "[Doc1.2]          GPSLatitude                     : -0.7\n"
+
+    with pytest.raises(TelemetryError, match=r"Unrecognised exiftool line: \[Doc1\.2\]"):
+        parse_ride(text, duration=1.0)
