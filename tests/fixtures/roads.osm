@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Hand-written roads around (-0.700, 36.900)–(-0.700, 36.910); ids say what each way tests. -->
+<osm version="0.6" generator="hand">
+  <node id="1" lat="-0.7000000" lon="36.9000000" version="1" timestamp="2026-10-20T08:00:00Z"/>
+  <node id="2" lat="-0.7000000" lon="36.9050000" version="1" timestamp="2026-10-20T08:00:00Z"/>
+  <node id="3" lat="-0.7000000" lon="36.9100000" version="1" timestamp="2026-10-20T08:00:00Z"/>
+  <node id="4" lat="-0.7010000" lon="36.9050000" version="1" timestamp="2026-10-20T08:00:00Z"/>
+  <!-- 1.1 km north and south of the Ride: outside the margin, but a way between them crosses it. -->
+  <node id="20" lat="-0.6900000" lon="36.9050000" version="1" timestamp="2026-10-20T08:00:00Z"/>
+  <node id="21" lat="-0.7100000" lon="36.9050000" version="1" timestamp="2026-10-20T08:00:00Z"/>
+  <!-- 90 km south: nowhere near the Ride. -->
+  <node id="30" lat="-1.5000000" lon="36.9000000" version="1" timestamp="2026-10-20T08:00:00Z"/>
+  <node id="31" lat="-1.5000000" lon="36.9100000" version="1" timestamp="2026-10-20T08:00:00Z"/>
+
+  <!-- 1xx: kept, by class. -->
+  <way id="101" version="1" timestamp="2026-10-22T09:30:00Z"><nd ref="1"/><nd ref="2"/><tag k="highway" v="motorway"/></way>
+  <way id="102" version="1" timestamp="2026-10-20T08:00:00Z"><nd ref="1"/><nd ref="2"/><tag k="highway" v="trunk"/></way>
+  <way id="103" version="1" timestamp="2026-10-20T08:00:00Z"><nd ref="1"/><nd ref="2"/><tag k="highway" v="primary"/></way>
+  <way id="104" version="1" timestamp="2026-10-20T08:00:00Z"><nd ref="2"/><nd ref="4"/><tag k="highway" v="primary_link"/></way>
+  <way id="111" version="1" timestamp="2026-10-20T08:00:00Z"><nd ref="2"/><nd ref="3"/><tag k="highway" v="secondary"/></way>
+  <way id="112" version="1" timestamp="2026-10-20T08:00:00Z"><nd ref="2"/><nd ref="3"/><tag k="highway" v="tertiary"/></way>
+  <way id="121" version="1" timestamp="2026-10-20T08:00:00Z"><nd ref="2"/><nd ref="4"/><tag k="highway" v="residential"/></way>
+  <way id="122" version="1" timestamp="2026-10-20T08:00:00Z"><nd ref="2"/><nd ref="4"/><tag k="highway" v="unclassified"/></way>
+  <way id="123" version="1" timestamp="2026-10-20T08:00:00Z"><nd ref="2"/><nd ref="4"/><tag k="highway" v="track"/></way>
+  <way id="124" version="1" timestamp="2026-10-20T08:00:00Z"><nd ref="2"/><nd ref="4"/><tag k="highway" v="living_street"/></way>
+
+  <!-- 2xx: dropped classes, and a way that isn't a road. -->
+  <way id="201" version="1" timestamp="2026-10-20T08:00:00Z"><nd ref="1"/><nd ref="4"/><tag k="highway" v="footway"/></way>
+  <way id="202" version="1" timestamp="2026-10-20T08:00:00Z"><nd ref="1"/><nd ref="4"/><tag k="highway" v="cycleway"/></way>
+  <way id="203" version="1" timestamp="2026-10-20T08:00:00Z"><nd ref="1"/><nd ref="4"/><tag k="highway" v="path"/></way>
+  <way id="204" version="1" timestamp="2026-10-20T08:00:00Z"><nd ref="1"/><nd ref="4"/><tag k="highway" v="service"/></way>
+  <way id="205" version="1" timestamp="2026-10-20T08:00:00Z"><nd ref="1"/><nd ref="4"/><tag k="highway" v="steps"/></way>
+  <way id="206" version="1" timestamp="2026-10-20T08:00:00Z"><nd ref="1"/><nd ref="4"/><tag k="highway" v="bridleway"/></way>
+  <way id="207" version="1" timestamp="2026-10-20T08:00:00Z"><nd ref="1"/><nd ref="2"/><nd ref="4"/><nd ref="1"/><tag k="building" v="yes"/></way>
+
+  <!-- 3xx: clipping. -->
+  <way id="301" version="1" timestamp="2026-10-20T08:00:00Z"><nd ref="20"/><nd ref="21"/><tag k="highway" v="secondary"/></way>
+  <way id="302" version="1" timestamp="2026-10-20T08:00:00Z"><nd ref="30"/><nd ref="31"/><tag k="highway" v="primary"/></way>
+</osm>

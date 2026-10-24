@@ -50,6 +50,10 @@ class Ride(BaseModel):
     issues: list[Issue] = []
     """Runs of invalid Samples, in Track order."""
 
+    @property
+    def valid_samples(self) -> list[Sample]:
+        return [s for s in self.samples if s.valid]
+
 
 KMH_PER_MS = 3.6
 """Kilometres per hour in one metre per second; exiftool reports GPSSpeed in km/h."""

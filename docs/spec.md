@@ -98,7 +98,7 @@ Style: Forza Horizon-like. Near-black translucent surface, grey roads, Upcoming 
 
 ## Stack
 
-Python 3.12, uv, Typer, pydantic, pyproj, Shapely, skia-python, FFmpeg 7. Target: macOS on Apple Silicon (Linux not blocked, not tested).
+Python 3.12, uv, Typer, pydantic, pyproj, pyosmium, NumPy, Shapely, skia-python, FFmpeg 7. Target: macOS on Apple Silicon (Linux not blocked, not tested).
 
 ## Testing
 
