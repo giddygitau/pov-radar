@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from pov_radar.maps import EXTRACT_URL, extract_path
 from pov_radar.projection import LocalProjection
 from pov_radar.ride import Ride, Sample
 from pov_radar.roads import MapData
@@ -82,3 +83,16 @@ def test_an_extract_is_indexed_once_and_reopened(map_data: MapData) -> None:
 
 def test_an_extract_without_an_index_does_not_open(tmp_path: Path) -> None:
     assert MapData.open(tmp_path / "kenya-latest.osm.pbf") is None
+
+
+KENYA_EXTRACT = extract_path(EXTRACT_URL)
+
+
+@pytest.mark.skipif(not MapData.open(KENYA_EXTRACT), reason="needs an indexed Kenya extract (`pov-radar maps update`)")
+def test_the_kenya_extract_classes_thika_road_as_a_major_road() -> None:
+    # The reference clip has no major road within 3 km, so this covers the major class on real data.
+    map_data = MapData.open(KENYA_EXTRACT)
+    assert map_data
+    roysambu = Ride(duration=1.0, samples=[sample(0.0, -1.2186, 36.8865)])
+
+    assert map_data.roads_around(roysambu).counts()["major"] >= 1
