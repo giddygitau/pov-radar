@@ -1,12 +1,13 @@
 """Local metres around a Ride, shared by its Samples and the Road network so they line up."""
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 from pyproj import Transformer
 
-from pov_radar.ride import Ride
+if TYPE_CHECKING:
+    from pov_radar.ride import Ride
 
 
 class LocalProjection:
@@ -20,7 +21,7 @@ class LocalProjection:
         )
 
     @classmethod
-    def around(cls, ride: Ride) -> "LocalProjection":
+    def around(cls, ride: "Ride") -> "LocalProjection":
         """Centred on the mean position of the Ride's valid Samples."""
         valid = ride.valid_samples
         if not valid:
@@ -34,3 +35,8 @@ class LocalProjection:
         """(N, 2) array of x, y metres."""
         x, y = self._transformer.transform(np.asarray(longitudes), np.asarray(latitudes))
         return np.column_stack([x, y]).astype(np.float64)
+
+    def to_degrees(self, x: float, y: float) -> tuple[float, float]:
+        """A point in metres as (longitude, latitude)."""
+        longitude, latitude = self._transformer.transform(x, y, direction="INVERSE")
+        return float(longitude), float(latitude)

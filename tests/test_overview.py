@@ -156,3 +156,25 @@ def _square_pixels(size: int, start_km: float, end_km: float) -> slice:
     route = 2 / 2.32 * size
     edge = size / 2 - route / 2
     return slice(round(edge + start_km / 2 * route), round(edge + end_km / 2 * route) + 1)
+
+
+@pytest.mark.parametrize(
+    ("name", "time", "at_km"),
+    [("dot-start", 0.0, (0.0, 0.0)), ("dot-corner", 100.0, (2.0, 0.0)), ("dot-between", 127.5, (2.0, 0.55))],
+)
+def test_a_white_dot_marks_the_current_position(
+    name: str, time: float, at_km: tuple[float, float], request: pytest.FixtureRequest
+) -> None:
+    # The square's Samples are 0.1 km and 5 s apart: 100 s is its south-east corner and 127.5 s lies between two Samples 0.55 km north of it.
+    draw = Overview(SQUARE, FRAME_HEIGHT).frames(roads(SQUARE, SQUARE_ROADS))
+
+    image = draw(SQUARE.at(time))
+
+    white = np.argwhere((image[:, :, :3] > 240).all(axis=2) & (image[:, :, 3] > 240))
+    assert len(white), "the dot is drawn"
+    row, column = white.mean(axis=0)
+    # Rows count down from the top edge, so they measure km south of the square's north side.
+    east, south = at_km[0], 2 - at_km[1]
+    assert row == pytest.approx(_square_pixels(image.shape[0], south, south).start, abs=2)
+    assert column == pytest.approx(_square_pixels(image.shape[1], east, east).start, abs=2)
+    assert_matches_golden(image, name, request)

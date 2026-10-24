@@ -43,6 +43,10 @@ class Style:
     """Opacity, 0–255, of the soft glow in the accent colour beneath the Upcoming route."""
     upcoming_glow_scale: float = 2.2
     """Width of the glow beneath the Upcoming route, relative to the route's."""
+    marker: Colour = (255, 255, 255, 255)
+    """The Current position's marker."""
+    marker_halo: Colour = (0, 0, 0, 160)
+    """The dark ring around the marker that keeps it visible over the bright Upcoming route."""
     route_width: float = 0.0040
     """On the Minimap; the Overview scales it by `Style.overview_line_scale` and `Style.overview_route_scale`."""
 
@@ -60,6 +64,10 @@ class Style:
     """Extra width for the Route on the Overview, so it stands out from the thinner roads."""
     overview_glow_blur: float = 0.003
     """How far the Upcoming route's glow spreads on the Overview."""
+    overview_dot: float = 0.0075
+    """Radius of the Overview's dot at the Current position."""
+    overview_dot_halo: float = 0.012
+    """Radius of the dark halo around the Overview's dot."""
     overview_minor_ink: float = 0.2
     """Most of each small patch of the Overview that minor roads may cover; denser ones are thinned."""
     overview_patch: float = 0.02

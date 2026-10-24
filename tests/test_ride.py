@@ -4,7 +4,7 @@ from typing import Literal
 
 import pytest
 
-from pov_radar.ride import KMH_PER_MS, TelemetryError, join, parse_ride
+from pov_radar.ride import KMH_PER_MS, Ride, TelemetryError, join, parse_ride
 
 GPS_COLUMNS = ["GPSLatitude", "GPSLongitude", "GPSAltitude", "GPSSpeed"]
 
@@ -363,3 +363,45 @@ def test_the_route_geojson_leaves_out_invalid_samples_and_breaks_at_each_fix_gap
         [(36.9, -0.7), (36.9, -0.6999)],
         [(36.9, -0.6997), (36.9, -0.6996)],
     ]
+
+
+def riding_east(fixes: list[int]) -> Ride:
+    """A Sample a second, 0.0001° of longitude (~11.1 m at 0.7° S) further east each time, with these Fixes."""
+    payloads = [
+        Payload(sample_time=float(t), fix=fix, gps=[(ROW[0], ROW[1] + t * 0.0001, ROW[2], 40.0)])
+        for t, fix in enumerate(fixes)
+    ]
+    return parse_ride(exiftool_text(*payloads), duration=float(len(fixes)))
+
+
+EAST_STEP = 0.0001 * METRES_PER_DEGREE * math.cos(math.radians(0.7))
+"""Metres between consecutive Samples of `riding_east`."""
+
+
+def test_the_current_position_is_interpolated_between_samples() -> None:
+    ride = riding_east([3, 3, 3])
+
+    start, quarter, later = ride.at(0.0), ride.at(0.25), ride.at(1.5)
+
+    assert quarter.longitude == pytest.approx(ROW[1] + 0.000025)
+    assert quarter.latitude == pytest.approx(ROW[0])
+    assert math.dist(start.metres, quarter.metres) == pytest.approx(EAST_STEP / 4, rel=0.01)
+    assert later.metres[0] - start.metres[0] == pytest.approx(EAST_STEP * 1.5, rel=0.01)
+    assert later.metres[1] == pytest.approx(start.metres[1], abs=0.01), "due east"
+
+
+def test_the_current_position_skips_invalid_samples() -> None:
+    ride = riding_east([3, 0, 3])
+
+    assert ride.at(1.0).longitude == pytest.approx(ROW[1] + 0.0001), "halfway between the valid Samples either side"
+    assert ride.at(1.0).metres[0] - ride.at(0.0).metres[0] == pytest.approx(EAST_STEP, rel=0.01)
+
+
+def test_the_current_position_does_not_depend_on_query_order() -> None:
+    ride = riding_east([3] * 6)
+    times = [0.1 * k for k in range(60)]
+
+    forwards = [ride.at(t) for t in times]
+    shuffled = {t: ride.at(t) for t in sorted(times, key=lambda t: (t * 7.3) % 1)}
+
+    assert [shuffled[t] for t in times] == forwards

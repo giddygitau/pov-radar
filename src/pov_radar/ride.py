@@ -4,10 +4,15 @@ import math
 import re
 from bisect import bisect_left
 from collections import defaultdict
+from functools import cached_property
 from itertools import groupby
 from typing import Literal
 
+import numpy as np
+from numpy.typing import NDArray
 from pydantic import BaseModel
+
+from pov_radar.projection import LocalProjection
 
 
 class TelemetryError(Exception):
@@ -62,6 +67,18 @@ class MultiLineString(BaseModel):
     """Lines of (longitude, latitude) positions."""
 
 
+class FrameState(BaseModel):
+    """The Ride at one instant on the Video timeline."""
+
+    time: float
+    """Seconds on the Video timeline."""
+    latitude: float
+    longitude: float
+    """The Current position."""
+    metres: tuple[float, float]
+    """The Current position in the Ride's projection: metres east and north of its centre."""
+
+
 MAX_GAP = 0.5
 """Seconds without a valid Sample longer than which, by default, there is a Fix gap."""
 
@@ -96,6 +113,34 @@ class Ride(BaseModel):
         return MultiLineString(
             coordinates=[[(s.longitude, s.latitude) for s in line] for line in lines if len(line) > 1]
         )
+
+    @cached_property
+    def projection(self) -> LocalProjection:
+        """Local metres centred on the valid Samples, shared by everything drawn for the Ride."""
+        return LocalProjection.around(self)
+
+    def at(self, t: float) -> FrameState:
+        """The Ride `t` seconds into the Video timeline, interpolated in metres between the valid Samples either
+        side; held at the first or last one outside them.
+
+        For now this crosses Fix gaps of any length and holds before the first Fix; the playback policy of
+        ADR-0004 (hidden, held dimmed) is still to come.
+        """
+        times, metres = self._timeline
+        if not len(times):
+            raise ValueError("A Ride with no valid Samples has no Current position")
+        x, y = (float(np.interp(t, times, column)) for column in (metres[:, 0], metres[:, 1]))
+        longitude, latitude = self.projection.to_degrees(x, y)
+        return FrameState(time=t, latitude=latitude, longitude=longitude, metres=(x, y))
+
+    @cached_property
+    def _timeline(self) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+        """The valid Samples' times and projected metres, drawn up once for `at`."""
+        valid = self.valid_samples
+        times = np.array([s.time for s in valid], dtype=np.float64)
+        if not valid:
+            return times, np.empty((0, 2))
+        return times, self.projection.to_metres([s.longitude for s in valid], [s.latitude for s in valid])
 
 
 KMH_PER_MS = 3.6

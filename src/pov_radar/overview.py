@@ -1,5 +1,6 @@
 """The Overview Renderer: the whole Route north-up over the Road network, in a rounded rectangle."""
 
+from collections.abc import Callable
 from importlib import import_module
 from pathlib import Path
 from typing import Any
@@ -7,8 +8,7 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
-from pov_radar.projection import LocalProjection
-from pov_radar.ride import Ride
+from pov_radar.ride import FrameState, Ride
 from pov_radar.roads import RoadNetwork
 from pov_radar.style import Colour, Style
 
@@ -26,8 +26,7 @@ class Overview:
         self.style = style or Style()
         self.frame_height = frame_height
         valid = ride.valid_samples
-        projection = LocalProjection.around(ride)
-        self._route = projection.to_metres([s.longitude for s in valid], [s.latitude for s in valid])
+        self._route = ride.projection.to_metres([s.longitude for s in valid], [s.latitude for s in valid])
 
         (west, south), (east, north) = self._route.min(axis=0), self._route.max(axis=0)
         padding = self.style.overview_padding * max(east - west, north - south, MIN_EXTENT)
@@ -43,9 +42,34 @@ class Overview:
 
     def render(self, roads: RoadNetwork) -> NDArray[np.uint8]:
         """The Overview as (height, width, 4) RGBA with straight alpha, the whole Route Upcoming."""
-        s, h = self.style, self.frame_height
         surface = skia.Surface(self.width, self.height)
-        canvas = surface.getCanvas()
+        self._draw_map(surface.getCanvas(), roads)
+        return _pixels(surface)
+
+    def frames(self, roads: RoadNetwork) -> Callable[[FrameState], NDArray[np.uint8]]:
+        """A function drawing the Overview at a frame state, with a dot at its Current position; the map beneath
+        is drawn once, here."""
+        surface = skia.Surface(self.width, self.height)
+        self._draw_map(surface.getCanvas(), roads)
+        background = surface.makeImageSnapshot()
+        s, h = self.style, self.frame_height
+        halo = skia.Paint(Color=_colour(s.marker_halo), AntiAlias=True)
+        dot = skia.Paint(Color=_colour(s.marker), AntiAlias=True)
+
+        def draw(state: FrameState) -> NDArray[np.uint8]:
+            canvas = surface.getCanvas()
+            canvas.clear(skia.ColorTRANSPARENT)
+            canvas.drawImage(background, 0, 0)
+            ((x, y),) = self._pixels(np.array([state.metres]))
+            canvas.drawCircle(x, y, s.overview_dot_halo * h, halo)
+            canvas.drawCircle(x, y, s.overview_dot * h, dot)
+            return _pixels(surface)
+
+        return draw
+
+    def _draw_map(self, canvas: Any, roads: RoadNetwork) -> None:
+        """The surface, roads, whole Route and outline, on a cleared canvas."""
+        s, h = self.style, self.frame_height
         canvas.clear(skia.ColorTRANSPARENT)
         corner = s.overview_corner * self.height
         shape = skia.Path().addRRect(skia.RRect.MakeRectXY(skia.Rect(self.width, self.height), corner, corner))
@@ -66,7 +90,6 @@ class Overview:
         canvas.drawPath(route, _stroke(s.upcoming, width))
         canvas.restore()
         canvas.drawPath(shape, _stroke(s.ring, s.ring_width * h))
-        return surface.toarray(colorType=skia.kRGBA_8888_ColorType, alphaType=skia.kUnpremul_AlphaType)
 
     def _thinned(self, lines: list[NDArray[np.float64]], width: float) -> list[NDArray[np.float64]]:
         """The longest of `lines`, in pixels `width` wide, kept until each patch of the Overview is as covered as
@@ -113,6 +136,11 @@ def write_png(image: NDArray[np.uint8], path: Path) -> None:
 def read_png(path: Path) -> NDArray[np.uint8]:
     """A PNG as (height, width, 4) straight-alpha RGBA."""
     return skia.Image.open(str(path)).toarray(colorType=skia.kRGBA_8888_ColorType, alphaType=skia.kUnpremul_AlphaType)
+
+
+def _pixels(surface: Any) -> NDArray[np.uint8]:
+    """A surface's contents as (height, width, 4) straight-alpha RGBA."""
+    return surface.toarray(colorType=skia.kRGBA_8888_ColorType, alphaType=skia.kUnpremul_AlphaType)
 
 
 def _path(lines: list[NDArray[np.float64]]) -> Any:

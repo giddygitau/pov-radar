@@ -40,16 +40,20 @@ def map_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return cache
 
 
-@pytest.fixture
-def plain_mp4(tmp_path: Path) -> Path:
-    """A real, playable MP4 with no `gpmd` telemetry track."""
+def footage(tmp_path: Path, size: str) -> Path:
+    """A real, playable 1 s, 10 fps MP4 of `size` pixels, with no `gpmd` telemetry track."""
     path = tmp_path / "footage" / "GX010001.MP4"
     path.parent.mkdir()
     subprocess.run(
-        ["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc=duration=1:size=64x64:rate=10", str(path)],
+        ["ffmpeg", "-v", "error", "-f", "lavfi", "-i", f"testsrc=duration=1:size={size}:rate=10", str(path)],
         check=True,
     )
     return path
+
+
+@pytest.fixture
+def plain_mp4(tmp_path: Path) -> Path:
+    return footage(tmp_path, "64x64")
 
 
 @pytest.mark.parametrize("missing", ["exiftool", "ffprobe"])
@@ -416,3 +420,102 @@ def test_inspect_reports_fix_gaps_and_writes_the_route_broken_at_them(
     assert "Fix gaps: 1.0–3.0 s\n          3.0–6.0 s\n" in output
     route = json.loads((tmp_path / "pov-radar" / "GX0001" / "route.geojson").read_text())
     assert route == {"type": "MultiLineString", "coordinates": [[[36.9, -0.7], [36.9, -0.6999]]]}
+
+
+def probe_video(path: Path, count_frames: bool = False) -> dict[str, str]:
+    """The first video stream's codec, profile, pixel format, frame rate, frame count and duration, per ffprobe;
+    the frames are counted by decoding them if `count_frames`, otherwise read from the container."""
+    frames = "nb_read_frames" if count_frames else "nb_frames"
+    result = subprocess.run(
+        [
+            "ffprobe", "-v", "error", "-select_streams", "v:0", *(["-count_frames"] if count_frames else []),
+            "-show_entries", f"stream=codec_name,profile,pix_fmt,r_frame_rate,{frames},duration",
+            "-of", "json", str(path),
+        ],
+        capture_output=True, text=True, check=True,
+    )
+    stream = json.loads(result.stdout)["streams"][0]
+    stream["frames"] = stream.pop(frames)
+    return stream
+
+
+def first_frame(path: Path) -> np.ndarray[tuple[int, int, int], np.dtype[np.uint8]]:
+    """The video's first frame as (height, width, 4) RGBA, decoded by ffmpeg."""
+    size = subprocess.run(
+        [
+            "ffprobe", "-v", "error", "-select_streams", "v:0",
+            "-show_entries", "stream=width,height", "-of", "csv=p=0", str(path),
+        ],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip().split(",")
+    width, height = int(size[0]), int(size[1])
+    raw = subprocess.run(
+        ["ffmpeg", "-v", "error", "-i", str(path), "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgba", "-"],
+        capture_output=True, check=True,
+    ).stdout
+    return np.frombuffer(raw, np.uint8).reshape(height, width, 4)
+
+
+def assert_is_an_overlay_matching(overlay: Path, source: Path) -> None:
+    """ProRes 4444 with a genuine alpha channel, frame for frame as long as the source, transparent at the corner."""
+    # Decoding a 4K source to count its frames takes minutes, so its container's count is trusted.
+    rendered, original = probe_video(overlay, count_frames=True), probe_video(source)
+    assert rendered["codec_name"] == "prores" and "4444" in rendered["profile"]
+    assert rendered["pix_fmt"].startswith("yuva"), f"{rendered['pix_fmt']} has no alpha channel"
+    assert rendered["r_frame_rate"] == original["r_frame_rate"]
+    assert rendered["frames"] == original["frames"]
+    assert float(rendered["duration"]) == pytest.approx(float(original["duration"]), abs=0.001)
+    assert first_frame(overlay)[0, 0, 3] == 0, "outside the Overview's rounded corner is transparent"
+
+
+def test_render_writes_the_overview_as_a_transparent_overlay_frame_for_frame(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, map_cache: Path
+) -> None:
+    # Big enough for the Overview's rounded corners to be more than a pixel; a Sample at each end ~1.1 km apart.
+    source = footage(tmp_path, "640x360")
+    ride = chapter_ride(1.0, -0.7, -0.7)
+    ride.samples[1].longitude = 36.91
+
+    def read_ride(path: Path) -> Ride:
+        return ride
+
+    monkeypatch.setattr(cli, "read_ride", read_ride)
+
+    result = runner.invoke(app, ["render", str(source)], input="n\n")
+
+    assert result.exit_code == 0, result.output
+    overview = source.parent / "pov-radar" / "GX0001" / "overview.mov"
+    assert f"Wrote {overview}" in result.output
+    assert "Rendering overview.mov" in result.output
+    assert_is_an_overlay_matching(overview, source)
+
+
+@pytest.mark.skipif(not REFERENCE_CLIP.exists(), reason="reference clip is not in input/")
+def test_the_reference_clip_renders_an_overview_overlay(tmp_path: Path, map_cache: Path) -> None:
+    result = runner.invoke(app, ["render", str(REFERENCE_CLIP), "--out", str(tmp_path)], input="n\n")
+
+    assert result.exit_code == 0, result.output
+    assert_is_an_overlay_matching(tmp_path / "overview.mov", REFERENCE_CLIP)
+
+
+def test_render_refuses_chapters_that_differ_in_frame_rate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, map_cache: Path
+) -> None:
+    first = footage(tmp_path, "640x360")
+    second = first.with_name("GX020001.MP4")
+    subprocess.run(
+        ["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc=duration=1:size=640x360:rate=25", str(second)],
+        check=True,
+    )
+    rides = {first.name: chapter_ride(1.0, -0.7), second.name: chapter_ride(1.0, -0.7001)}
+
+    def read_ride(path: Path) -> Ride:
+        return rides[path.name]
+
+    monkeypatch.setattr(cli, "read_ride", read_ride)
+
+    result = runner.invoke(app, ["render", str(first)], input="n\n")
+
+    assert result.exit_code == 1
+    assert "differ in frame rate or size" in result.output
+    assert not (first.parent / "pov-radar" / "GX0001" / "overview.mov").exists()

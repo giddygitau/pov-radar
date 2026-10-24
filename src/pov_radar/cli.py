@@ -15,6 +15,7 @@ from pov_radar.recording import DiscoveryError, Recording, discover
 from pov_radar.ride import KMH_PER_MS, MAX_GAP, MAX_SPEED, Ride, join
 from pov_radar.overview import Overview, write_png
 from pov_radar.roads import MINIMAP_REACH, MapData, RoadClass, RoadNetwork
+from pov_radar.video import OverlayWriter, VideoError, read_frames
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
 
@@ -49,32 +50,61 @@ def main() -> None:
     """Game-style navigation Overlays from GoPro GPS telemetry."""
 
 
+Sources = Annotated[
+    list[Path],
+    typer.Argument(
+        help="A GoPro Chapter (its Recording's other Chapters are found), a folder (one Ride per Recording), "
+        "or several Chapters (grouped by Recording; other names are joined in the order given)"
+    ),
+]
+Out = Annotated[
+    Path | None,
+    typer.Option(
+        help="Output folder; with several Rides, each goes in a subfolder "
+        "[default: pov-radar/<recording>/ beside the source]"
+    ),
+]
+MaxSpeed = Annotated[
+    float,
+    typer.Option(help="Km/h faster than which the motorcycle can't have moved between Samples", min=0),
+]
+MaxGap = Annotated[
+    float,
+    typer.Option(help="Seconds without a valid Sample longer than which there is a Fix gap", min=0),
+]
+
+
 @app.command()
 def inspect(
-    sources: Annotated[
-        list[Path],
-        typer.Argument(
-            help="A GoPro Chapter (its Recording's other Chapters are found), a folder (one Ride per Recording), "
-            "or several Chapters (grouped by Recording; other names are joined in the order given)"
-        ),
-    ],
-    out: Annotated[
-        Path | None,
-        typer.Option(
-            help="Output folder; with several Rides, each goes in a subfolder "
-            "[default: pov-radar/<recording>/ beside the source]"
-        ),
-    ] = None,
-    max_speed: Annotated[
-        float,
-        typer.Option(help="Km/h faster than which the motorcycle can't have moved between Samples", min=0),
-    ] = MAX_SPEED * KMH_PER_MS,
-    max_gap: Annotated[
-        float,
-        typer.Option(help="Seconds without a valid Sample longer than which there is a Fix gap", min=0),
-    ] = MAX_GAP,
+    sources: Sources, out: Out = None, max_speed: MaxSpeed = MAX_SPEED * KMH_PER_MS, max_gap: MaxGap = MAX_GAP
 ) -> None:
     """Summarise each Ride's GPS telemetry and write its telemetry.json, route.geojson and an Overview preview.png."""
+    _each_ride(sources, out, max_speed / KMH_PER_MS, max_gap, lambda recording, folder, inspected: True)
+
+
+@app.command()
+def render(
+    sources: Sources, out: Out = None, max_speed: MaxSpeed = MAX_SPEED * KMH_PER_MS, max_gap: MaxGap = MAX_GAP
+) -> None:
+    """Inspect each Ride, as `inspect` does, then render its Overview as overview.mov, a transparent Overlay."""
+    _each_ride(sources, out, max_speed / KMH_PER_MS, max_gap, _render)
+
+
+class Inspected(BaseModel, arbitrary_types_allowed=True):
+    """A Ride that passed inspection, and the roads around it."""
+
+    ride: Ride
+    roads: RoadNetwork
+
+
+def _each_ride(
+    sources: list[Path],
+    out: Path | None,
+    max_speed: float,
+    max_gap: float,
+    then: Callable[[Recording, Path, Inspected], bool],
+) -> None:
+    """Inspect the Ride of each Recording found in `sources`, then do `then` with it, exiting 1 if any failed."""
     try:
         recordings = discover(sources)
     except DiscoveryError as error:
@@ -92,16 +122,17 @@ def inspect(
             folder = recording.chapters[0].parent / "pov-radar" / recording.name
         else:
             folder = out / recording.name if len(recordings) > 1 else out
-        failed |= not _inspect(recording, folder, map_data, max_speed / KMH_PER_MS, max_gap)
+        inspected = _inspect(recording, folder, map_data, max_speed, max_gap)
+        failed |= inspected is None or not then(recording, folder, inspected)
     if failed:
         raise typer.Exit(1)
 
 
 def _inspect(
     recording: Recording, out: Path, map_data: Callable[[], MapData | None], max_speed: float, max_gap: float
-) -> bool:
+) -> Inspected | None:
     """Report one Ride and write its telemetry and Route, `max_speed` in metres per second and `max_gap` in
-    seconds; False if it couldn't be."""
+    seconds; None if it couldn't be."""
     typer.echo(f"{recording.name}: {', '.join(path.name for path in recording.chapters)}")
     if recording.missing:
         plural = "s" if len(recording.missing) > 1 else ""
@@ -110,12 +141,12 @@ def _inspect(
         ride = join([read_ride(path) for path in recording.chapters], max_speed)
     except ChapterError as error:
         typer.echo(f"Error: {error}", err=True)
-        return False
+        return None
 
     typer.echo(_summary(ride, max_gap))
     if not ride.valid_samples:
         typer.echo(f"Error: {recording.name} has no valid Samples; there is nothing to map", err=True)
-        return False
+        return None
 
     overview = Overview(ride, PREVIEW_FRAME_HEIGHT)
     record = None
@@ -138,6 +169,27 @@ def _inspect(
     preview = out / "preview.png"
     write_png(overview.render(roads), preview)
     typer.echo(f"Wrote {preview}")
+    return Inspected(ride=ride, roads=roads)
+
+
+def _render(recording: Recording, out: Path, inspected: Inspected) -> bool:
+    """Render the Overview Overlay frame for frame with the Ride's footage; False if it couldn't be."""
+    ride = inspected.ride
+    path = out / "overview.mov"
+    try:
+        frames = read_frames(recording.chapters)
+        overview = Overview(ride, frames.height)
+        draw = overview.frames(inspected.roads)
+        with (
+            OverlayWriter(path, overview.width, overview.height, frames.rate) as writer,
+            typer.progressbar(range(frames.count), label=f"Rendering {path.name}", show_percent=True) as bar,
+        ):
+            for frame in bar:
+                writer.write(draw(ride.at(float(frame / frames.rate))))
+    except VideoError as error:
+        typer.echo(f"Error: {error}", err=True)
+        return False
+    typer.echo(f"Wrote {path}")
     return True
 
 
