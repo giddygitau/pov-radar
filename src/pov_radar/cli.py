@@ -34,12 +34,15 @@ def inspect(
         typer.echo(f"Error: {error}", err=True)
         raise typer.Exit(1) from error
 
+    typer.echo(_summary(ride))
+    if not any(s.usable for s in ride.samples):
+        typer.echo(f"Error: {source.name} has no usable Samples; there is nothing to map", err=True)
+        raise typer.Exit(1)
+
     out = out or _default_out(source)
     out.mkdir(parents=True, exist_ok=True)
     telemetry = out / "telemetry.json"
     telemetry.write_text(ride.model_dump_json(indent=2))
-
-    typer.echo(_summary(ride))
     typer.echo(f"Wrote {telemetry}")
 
 
@@ -49,11 +52,15 @@ def _default_out(source: Path) -> Path:
 
 
 def _summary(ride: Ride) -> str:
-    speeds = [s.speed * KMH_PER_MS for s in ride.samples]
-    return "\n".join(
-        [
-            f"Duration: {ride.duration:.1f} s",
-            f"Samples:  {len(ride.samples)} at {len(ride.samples) / ride.duration:.1f} Hz",
-            f"Speed:    {min(speeds):.0f}–{max(speeds):.0f} km/h, mean {fmean(speeds):.0f} km/h",
-        ]
-    )
+    usable = [s for s in ride.samples if s.usable]
+    lines = [
+        f"Duration: {ride.duration:.1f} s",
+        f"Samples:  {len(ride.samples)} at {len(ride.samples) / ride.duration:.1f} Hz",
+        f"Usable:   {len(usable)} of {len(ride.samples)}",
+    ]
+    if usable:
+        speeds = [s.speed * KMH_PER_MS for s in usable]
+        lines.append(f"Speed:    {min(speeds):.0f}–{max(speeds):.0f} km/h, mean {fmean(speeds):.0f} km/h")
+    issues = [f"{i.kind} {i.start:.1f}–{i.end:.1f} s" for i in ride.issues] or ["none"]
+    lines += [f"Issues:   {issues[0]}", *(f"          {issue}" for issue in issues[1:])]
+    return "\n".join(lines)

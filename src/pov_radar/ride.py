@@ -2,6 +2,8 @@
 
 import re
 from collections import defaultdict
+from itertools import groupby
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -19,16 +21,34 @@ class Sample(BaseModel):
     """Metres above mean sea level."""
     speed: float
     """Metres per second (2D ground speed)."""
-    fix: int
-    """GPS fix state: 0 none, 2 two-dimensional, 3 three-dimensional."""
+    fix: int | None
+    """GPS fix state: 0 none, 2 two-dimensional, 3 three-dimensional; None if the payload doesn't say."""
     precision: float
     """Horizontal dilution of precision; under 5 is good."""
+    usable: bool = True
+    """Whether validation trusts this Sample's position."""
+
+
+IssueKind = Literal["no_fix", "invalid_coordinates"]
+
+
+class Issue(BaseModel):
+    """A run of consecutive Samples rejected for the same reason."""
+
+    kind: IssueKind
+    """Why the Samples were rejected."""
+    start: float
+    """Video timeline seconds of the first rejected Sample."""
+    end: float
+    """Video timeline seconds of the last rejected Sample."""
 
 
 class Ride(BaseModel):
     duration: float
     """Seconds of footage on the Video timeline."""
     samples: list[Sample]
+    issues: list[Issue] = []
+    """Runs of unusable Samples, in Track order."""
 
 
 KMH_PER_MS = 3.6
@@ -67,7 +87,7 @@ def parse_ride(text: str, duration: float) -> Ride:
             raise TelemetryError(f"Telemetry payload {doc} has unequal GPS columns {sorted(lengths)}")
         start = float(_single(tags, "SampleTime", doc))
         step = float(_single(tags, "SampleDuration", doc)) / len(columns[0])
-        fix = int(_single(tags, "GPSMeasureMode", doc))
+        fix = int(tags["GPSMeasureMode"][0]) if tags.get("GPSMeasureMode") else None
         precision = float(_single(tags, "GPSHPositioningError", doc))
         samples += [
             Sample(
@@ -81,7 +101,33 @@ def parse_ride(text: str, duration: float) -> Ride:
             )
             for i, (latitude, longitude, altitude, speed) in enumerate(zip(*columns))
         ]
-    return Ride(duration=duration, samples=samples)
+    return Ride(duration=duration, samples=samples, issues=_validate(samples))
+
+
+MIN_FIX = 2
+"""The lowest GPSMeasureMode with a trustworthy position: a two-dimensional Fix."""
+
+
+def _validate(samples: list[Sample]) -> list[Issue]:
+    """Mark untrustworthy Samples unusable, reporting each run of one rejection kind as an Issue."""
+    issues: list[Issue] = []
+    for kind, group in groupby(samples, _rejection):
+        run = list(group)
+        for sample in run:
+            sample.usable = kind is None
+        if kind is not None:
+            issues.append(Issue(kind=kind, start=run[0].time, end=run[-1].time))
+    return issues
+
+
+def _rejection(sample: Sample) -> IssueKind | None:
+    if sample.fix is not None and sample.fix < MIN_FIX:
+        return "no_fix"
+    # NaN fails both range checks.
+    in_range = -90 <= sample.latitude <= 90 and -180 <= sample.longitude <= 180
+    if not in_range or sample.latitude == sample.longitude == 0:
+        return "invalid_coordinates"
+    return None
 
 
 def _single(tags: dict[str, list[str]], name: str, doc: int) -> str:

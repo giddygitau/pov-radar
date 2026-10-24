@@ -7,7 +7,9 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+from pov_radar import cli
 from pov_radar.cli import app
+from pov_radar.ride import Issue, Ride, Sample
 
 runner = CliRunner()
 
@@ -74,6 +76,32 @@ def test_a_file_that_is_not_a_video_is_rejected(tmp_path: Path) -> None:
     assert_wrote_nothing(source)
 
 
+def test_a_ride_with_no_usable_samples_stops_after_its_summary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "GX010001.MP4"
+    source.write_bytes(b"")
+    samples = [
+        Sample(time=t, latitude=0.0, longitude=0.0, altitude=0.0, speed=0.0, fix=0, precision=99.0, usable=False)
+        for t in (0.0, 0.5, 1.0)
+    ]
+    issues = [Issue(kind="no_fix", start=0.0, end=0.5), Issue(kind="invalid_coordinates", start=1.0, end=1.0)]
+    ride = Ride(duration=1.5, samples=samples, issues=issues)
+    def read_ride(path: Path) -> Ride:
+        return ride
+
+    monkeypatch.setattr(cli, "read_ride", read_ride)
+
+    code, output = inspect(source)
+
+    assert code == 1
+    assert "Samples:  3 at 2.0 Hz" in output
+    assert "Usable:   0 of 3" in output
+    assert "Issues:   no_fix 0.0–0.5 s\n          invalid_coordinates 1.0–1.0 s\n" in output
+    assert "no usable Samples" in output
+    assert_wrote_nothing(source)
+
+
 @pytest.mark.skipif(not REFERENCE_CLIP.exists(), reason="reference clip is not in input/")
 def test_the_reference_clip_is_summarised_and_its_telemetry_written(tmp_path: Path) -> None:
     source = tmp_path / REFERENCE_CLIP.name
@@ -90,10 +118,14 @@ def test_the_reference_clip_is_summarised_and_its_telemetry_written(tmp_path: Pa
     assert int(count[1]) == pytest.approx(950, abs=20)
     assert float(count[2]) == pytest.approx(10, abs=0.5)
     assert 40 <= float(mean[1]) <= 50
+    assert "Usable:   950 of 950" in output
+    assert "Issues:   none" in output
 
     telemetry = json.loads((tmp_path / "pov-radar" / "GX0710" / "telemetry.json").read_text())
     assert len(telemetry["samples"]) == int(count[1])
-    assert set(telemetry["samples"][0]) >= {"time", "latitude", "longitude", "fix", "precision"}
+    assert set(telemetry["samples"][0]) >= {"time", "latitude", "longitude", "fix", "precision", "usable"}
+    assert all(s["usable"] for s in telemetry["samples"])
+    assert telemetry["issues"] == []
 
 
 @pytest.mark.skipif(not REFERENCE_CLIP.exists(), reason="reference clip is not in input/")

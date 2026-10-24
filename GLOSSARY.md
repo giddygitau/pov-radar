@@ -34,6 +34,10 @@ _Avoid_: GPX, trace, path
 The camera's state of having a valid satellite position; Samples without one carry no trustworthy position.
 _Avoid_: Lock, signal
 
+**Issue**:
+A run of consecutive Samples rejected as unusable for the same reason (e.g. no Fix, impossible coordinates), reported with its time range.
+_Avoid_: Error, warning, problem
+
 **Fix gap**:
 A stretch of the Video timeline with no valid Samples, including before the first Fix and after the last.
 _Avoid_: Dropout, outage, missing data
