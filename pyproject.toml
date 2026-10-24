@@ -1,0 +1,33 @@
+[project]
+name = "pov-radar"
+version = "0.1.0"
+description = "Game-style navigation overlays from GoPro GPS telemetry"
+readme = "README.md"
+authors = [
+    { name = "Gideon Gitau", email = "n.gideon.gitau@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2.14.1",
+    "typer>=0.27.3",
+]
+
+[project.scripts]
+pov-radar = "pov_radar.cli:app"
+
+[build-system]
+requires = ["uv_build>=0.8.22,<0.9.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pyright>=1.1.414",
+    "pytest>=9.1.1",
+]
+
+[tool.pyright]
+include = ["src", "tests"]
+typeCheckingMode = "strict"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
