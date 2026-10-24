@@ -13,9 +13,14 @@ from pov_radar import maps
 from pov_radar.chapter import ChapterError, read_ride
 from pov_radar.recording import DiscoveryError, Recording, discover
 from pov_radar.ride import KMH_PER_MS, MAX_GAP, MAX_SPEED, Ride, join
-from pov_radar.roads import MapData, RoadClass
+from pov_radar.overview import Overview, write_png
+from pov_radar.roads import MINIMAP_REACH, MapData, RoadClass, RoadNetwork
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
+
+
+PREVIEW_FRAME_HEIGHT = 2160
+"""The preview is drawn as the Overview would be on 4K footage."""
 
 
 class MapRecord(BaseModel):
@@ -69,7 +74,7 @@ def inspect(
         typer.Option(help="Seconds without a valid Sample longer than which there is a Fix gap", min=0),
     ] = MAX_GAP,
 ) -> None:
-    """Summarise each Ride's GPS telemetry and write its telemetry.json and route.geojson."""
+    """Summarise each Ride's GPS telemetry and write its telemetry.json, route.geojson and an Overview preview.png."""
     try:
         recordings = discover(sources)
     except DiscoveryError as error:
@@ -112,11 +117,14 @@ def _inspect(
         typer.echo(f"Error: {recording.name} has no valid Samples; there is nothing to map", err=True)
         return False
 
+    overview = Overview(ride, PREVIEW_FRAME_HEIGHT)
     record = None
+    roads = RoadNetwork([])
     if loaded := map_data():
         record = MapRecord(extract=loaded.extract.name, date=loaded.date, roads=loaded.roads_around(ride).counts())
-        roads = ", ".join(f"{count} {road_class}" for road_class, count in record.roads.items())
-        typer.echo(f"Roads:    {roads} (OpenStreetMap, {_date(loaded)})")
+        roads = loaded.roads_around(ride, margin=max(MINIMAP_REACH, overview.reach))
+        counts = ", ".join(f"{count} {road_class}" for road_class, count in record.roads.items())
+        typer.echo(f"Roads:    {counts} (OpenStreetMap, {_date(loaded)})")
     else:
         typer.echo("Roads:    no map data; run `pov-radar maps update`")
 
@@ -127,6 +135,9 @@ def _inspect(
     route = out / "route.geojson"
     route.write_text(ride.route_geojson(max_gap).model_dump_json())
     typer.echo(f"Wrote {route}")
+    preview = out / "preview.png"
+    write_png(overview.render(roads), preview)
+    typer.echo(f"Wrote {preview}")
     return True
 
 

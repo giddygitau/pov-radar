@@ -12,6 +12,7 @@ dependencies = [
     "osmium>=4.3.2",
     "pydantic>=2.14.1",
     "pyproj>=3.8.0",
+    "skia-python>=144.1",
     "typer>=0.27.3",
 ]
 

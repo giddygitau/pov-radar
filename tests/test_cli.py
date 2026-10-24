@@ -5,12 +5,14 @@ import subprocess
 import time
 from pathlib import Path
 
+import numpy as np
 import pytest
 import typer
 from typer.testing import CliRunner
 
 from pov_radar import cli, maps
 from pov_radar.cli import app
+from pov_radar.overview import read_png
 from pov_radar.ride import Ride, Sample
 from pov_radar.roads import MapData
 
@@ -237,6 +239,7 @@ def test_the_reference_clip_reports_the_roads_around_it_in_moments(tmp_path: Pat
     # The reference Chapter's ~1.2 km has no motorway, trunk or primary road within 3 km, so major is 0.
     assert int(roads[2]) > 0 and int(roads[3]) > 0
     assert elapsed < 5, f"inspect took {elapsed:.1f} s"
+    assert (tmp_path / "preview.png").exists()
 
 
 def test_maps_update_downloads_and_indexes_the_extract_and_reports_its_date(map_cache: Path) -> None:
@@ -301,6 +304,24 @@ def test_inspect_reports_the_roads_around_the_ride_and_records_the_map_data(
         "date": "2026-10-22T09:30:00Z",
         "roads": {"major": 4, "mid": 3, "minor": 4},
     }
+
+
+def test_inspect_draws_a_preview_of_the_overview_at_4k_proportions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, map_cache: Path
+) -> None:
+    source = ride_on_the_fixture_roads(tmp_path, monkeypatch)
+    assert runner.invoke(app, ["maps", "update"]).exit_code == 0
+
+    code, output = inspect(source)
+
+    assert code == 0, output
+    preview = source.parent / "pov-radar" / "GX0001" / "preview.png"
+    assert f"Wrote {preview}" in output
+    image = read_png(preview)
+    # 28% of 2160 high; a Ride due east is as wide as the Overview may be, 1.8 times its height.
+    assert image.shape == (605, 1089, 4)
+    road_grey = (image[:, :, 0] > 40) & (np.abs(image[:, :, 0].astype(int) - image[:, :, 2]) < 30)
+    assert road_grey.any(), "the fixture's roads are drawn"
 
 
 def test_a_missing_extract_is_offered_for_download_and_declining_skips_the_roads(
