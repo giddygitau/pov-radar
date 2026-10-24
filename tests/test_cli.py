@@ -265,8 +265,10 @@ def ride_on_the_fixture_roads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     source = tmp_path / "footage" / "GX010001.MP4"
     source.parent.mkdir()
     source.touch()
-    ride = chapter_ride(2.0, -0.7, -0.7)
+    ride = chapter_ride(61.0, -0.7, -0.7)
+    # 1.1 km east a minute later.
     ride.samples[1].longitude = 36.91
+    ride.samples[1].time = 60.0
 
     def read_ride(path: Path) -> Ride:
         return ride

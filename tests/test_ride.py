@@ -4,7 +4,7 @@ from typing import Literal
 
 import pytest
 
-from pov_radar.ride import TelemetryError, join, parse_ride
+from pov_radar.ride import KMH_PER_MS, TelemetryError, join, parse_ride
 
 GPS_COLUMNS = ["GPSLatitude", "GPSLongitude", "GPSAltitude", "GPSSpeed"]
 
@@ -163,8 +163,9 @@ def test_a_sample_with_impossible_coordinates_is_rejected(latitude: float, longi
     assert [(i.kind, i.start, i.end) for i in ride.issues] == [("invalid_coordinates", 0.25, 0.25)]
 
 
-def test_coordinates_on_the_equator_or_prime_meridian_alone_are_valid() -> None:
-    text = exiftool_text(Payload(gps=[(0.0, 36.9, 1746.0, 36.0), (-0.7, 0.0, 1746.0, 36.0)]))
+@pytest.mark.parametrize(("latitude", "longitude"), [(0.0, 36.9), (-0.7, 0.0)], ids=["equator", "prime-meridian"])
+def test_coordinates_on_the_equator_or_prime_meridian_alone_are_valid(latitude: float, longitude: float) -> None:
+    text = exiftool_text(Payload(gps=[(latitude, longitude, 1746.0, 36.0)]))
 
     ride = parse_ride(text, duration=1.0)
 
@@ -198,3 +199,111 @@ def test_a_run_of_invalid_samples_across_a_chapter_boundary_is_one_issue() -> No
     ride = join([first, second])
 
     assert [(i.kind, i.start, i.end) for i in ride.issues] == [("no_fix", 1.0, 2.5)]
+
+
+METRES_PER_DEGREE = 111_320.0
+"""Roughly, of latitude."""
+
+
+def riding_north(seconds: int, kmh: float = 60.0, rate: int = 10, start: float = 0.0) -> list[Payload]:
+    """One payload per second of a Track due north from ROW at a steady speed, `rate` Samples a second."""
+    step = kmh / KMH_PER_MS / rate / METRES_PER_DEGREE
+    return [
+        Payload(
+            sample_time=start + second,
+            gps=[(ROW[0] + (second * rate + i) * step, ROW[1], ROW[2], kmh) for i in range(rate)],
+        )
+        for second in range(seconds)
+    ]
+
+
+def with_row(payloads: list[Payload], payload: int, row: int, **changes: float) -> list[Payload]:
+    """`payloads` with one GPS row moved, e.g. `latitude=1.0`."""
+    gps = list(payloads[payload].gps)
+    latitude, longitude, altitude, speed = gps[row]
+    gps[row] = (
+        changes.get("latitude", latitude),
+        changes.get("longitude", longitude),
+        changes.get("altitude", altitude),
+        changes.get("speed", speed),
+    )
+    return payloads[:payload] + [Payload(sample_time=payloads[payload].sample_time, gps=gps)] + payloads[payload + 1 :]
+
+
+def test_a_single_far_off_spike_is_rejected_and_its_neighbours_kept() -> None:
+    payloads = with_row(riding_north(5), payload=2, row=3, latitude=ROW[0] + 0.1)
+
+    ride = parse_ride(exiftool_text(*payloads), duration=5.0)
+
+    assert [i for i, s in enumerate(ride.samples) if not s.valid] == [23]
+    assert [(i.kind, i.start, i.end) for i in ride.issues] == [("implausible_jump", pytest.approx(2.3), pytest.approx(2.3))]
+
+
+def test_bad_samples_at_the_very_start_are_rejected_and_the_rest_kept() -> None:
+    payloads = riding_north(5)
+    for row in range(4):
+        payloads = with_row(payloads, payload=0, row=row, latitude=ROW[0] + 0.5, longitude=ROW[1] + 0.5)
+
+    ride = parse_ride(exiftool_text(*payloads), duration=5.0)
+
+    assert [i for i, s in enumerate(ride.samples) if not s.valid] == [0, 1, 2, 3]
+    assert [(i.kind, i.start, i.end) for i in ride.issues] == [("implausible_jump", 0.0, pytest.approx(0.3))]
+
+
+def test_a_sample_repeating_the_previous_ones_timestamp_is_rejected() -> None:
+    # One Sample a second, the third payload sent twice.
+    payloads = riding_north(5, rate=1)
+    payloads.insert(3, payloads[2])
+
+    ride = parse_ride(exiftool_text(*payloads), duration=5.0)
+
+    assert [s.valid for s in ride.samples] == [True, True, True, False, True, True]
+    assert [(i.kind, i.start, i.end) for i in ride.issues] == [("duplicate_time", 2.0, 2.0)]
+
+
+@pytest.mark.parametrize("glitch", [1, 7], ids=["early", "late"])
+@pytest.mark.parametrize("time", [9000.0, -100.0], ids=["future", "past"])
+def test_a_single_sample_stamped_out_of_order_is_rejected_alone(glitch: int, time: float) -> None:
+    payloads = riding_north(10, rate=1)
+    payloads[glitch] = Payload(sample_time=time, gps=payloads[glitch].gps)
+
+    ride = parse_ride(exiftool_text(*payloads), duration=10.0)
+
+    assert [i for i, s in enumerate(ride.samples) if not s.valid] == [glitch]
+    assert [(i.kind, i.start, i.end) for i in ride.issues] == [("out_of_order_time", time, time)]
+
+
+def test_issues_are_reported_in_time_order_not_track_order() -> None:
+    payloads = with_row(riding_north(10, rate=1), payload=6, row=0, latitude=ROW[0] + 0.1)
+    payloads[2] = Payload(sample_time=9000.0, gps=payloads[2].gps)
+
+    ride = parse_ride(exiftool_text(*payloads), duration=10.0)
+
+    assert [(i.kind, i.start) for i in ride.issues] == [("implausible_jump", 6.0), ("out_of_order_time", 9000.0)]
+
+
+def test_the_speed_limit_is_configurable() -> None:
+    text = exiftool_text(*riding_north(3, kmh=200.0))
+
+    assert parse_ride(text, duration=3.0).issues == []
+    assert parse_ride(text, duration=3.0, max_speed=150 / KMH_PER_MS).issues != []
+    assert join([parse_ride(text, duration=3.0)], max_speed=150 / KMH_PER_MS).issues != []
+
+
+def test_a_two_hour_two_hundred_kilometre_ride_has_no_issues() -> None:
+    text = exiftool_text(*riding_north(2 * 3600, kmh=100.0))
+
+    ride = parse_ride(text, duration=2 * 3600.0)
+
+    assert ride.issues == []
+    assert len(ride.valid_samples) == 72_000
+
+
+def test_a_payload_sent_twice_is_one_duplicate_time_issue() -> None:
+    payloads = riding_north(5)
+    payloads.insert(3, payloads[2])
+
+    ride = parse_ride(exiftool_text(*payloads), duration=5.0)
+
+    assert [i for i, s in enumerate(ride.samples) if not s.valid] == list(range(30, 40))
+    assert [(i.kind, i.start, i.end) for i in ride.issues] == [("duplicate_time", 2.0, pytest.approx(2.9))]
