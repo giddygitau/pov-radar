@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from pov_radar import maps
 from pov_radar.chapter import ChapterError, read_ride
 from pov_radar.recording import DiscoveryError, Recording, discover
-from pov_radar.ride import KMH_PER_MS, MAX_SPEED, Ride, join
+from pov_radar.ride import KMH_PER_MS, MAX_GAP, MAX_SPEED, Ride, join
 from pov_radar.roads import MapData, RoadClass
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
@@ -64,8 +64,12 @@ def inspect(
         float,
         typer.Option(help="Km/h faster than which the motorcycle can't have moved between Samples", min=0),
     ] = MAX_SPEED * KMH_PER_MS,
+    max_gap: Annotated[
+        float,
+        typer.Option(help="Seconds without a valid Sample longer than which there is a Fix gap", min=0),
+    ] = MAX_GAP,
 ) -> None:
-    """Summarise each Ride's GPS telemetry and write its telemetry.json."""
+    """Summarise each Ride's GPS telemetry and write its telemetry.json and route.geojson."""
     try:
         recordings = discover(sources)
     except DiscoveryError as error:
@@ -83,13 +87,16 @@ def inspect(
             folder = recording.chapters[0].parent / "pov-radar" / recording.name
         else:
             folder = out / recording.name if len(recordings) > 1 else out
-        failed |= not _inspect(recording, folder, map_data, max_speed / KMH_PER_MS)
+        failed |= not _inspect(recording, folder, map_data, max_speed / KMH_PER_MS, max_gap)
     if failed:
         raise typer.Exit(1)
 
 
-def _inspect(recording: Recording, out: Path, map_data: Callable[[], MapData | None], max_speed: float) -> bool:
-    """Report one Ride and write its telemetry, `max_speed` in metres per second; False if it couldn't be."""
+def _inspect(
+    recording: Recording, out: Path, map_data: Callable[[], MapData | None], max_speed: float, max_gap: float
+) -> bool:
+    """Report one Ride and write its telemetry and Route, `max_speed` in metres per second and `max_gap` in
+    seconds; False if it couldn't be."""
     typer.echo(f"{recording.name}: {', '.join(path.name for path in recording.chapters)}")
     if recording.missing:
         plural = "s" if len(recording.missing) > 1 else ""
@@ -100,7 +107,7 @@ def _inspect(recording: Recording, out: Path, map_data: Callable[[], MapData | N
         typer.echo(f"Error: {error}", err=True)
         return False
 
-    typer.echo(_summary(ride))
+    typer.echo(_summary(ride, max_gap))
     if not ride.valid_samples:
         typer.echo(f"Error: {recording.name} has no valid Samples; there is nothing to map", err=True)
         return False
@@ -117,6 +124,9 @@ def _inspect(recording: Recording, out: Path, map_data: Callable[[], MapData | N
     telemetry = out / "telemetry.json"
     telemetry.write_text(Telemetry(**ride.model_dump(), map=record).model_dump_json(indent=2))
     typer.echo(f"Wrote {telemetry}")
+    route = out / "route.geojson"
+    route.write_text(ride.route_geojson(max_gap).model_dump_json())
+    typer.echo(f"Wrote {route}")
     return True
 
 
@@ -131,7 +141,7 @@ def _ranges(chapters: list[int]) -> str:
     return ", ".join(f"{run[0]:02}" if len(run) == 1 else f"{run[0]:02}–{run[-1]:02}" for run in runs)
 
 
-def _summary(ride: Ride) -> str:
+def _summary(ride: Ride, max_gap: float) -> str:
     valid = ride.valid_samples
     lines = [
         f"Duration: {ride.duration:.1f} s",
@@ -141,9 +151,15 @@ def _summary(ride: Ride) -> str:
     if valid:
         speeds = [s.speed * KMH_PER_MS for s in valid]
         lines.append(f"Speed:    {min(speeds):.0f}–{max(speeds):.0f} km/h, mean {fmean(speeds):.0f} km/h")
-    issues = [f"{i.kind} {i.start:.1f}–{i.end:.1f} s" for i in ride.issues] or ["none"]
-    lines += [f"Issues:   {issues[0]}", *(f"          {issue}" for issue in issues[1:])]
+    lines += _listed("Issues:", [f"{i.kind} {i.start:.1f}–{i.end:.1f} s" for i in ride.issues])
+    lines += _listed("Fix gaps:", [f"{g.start:.1f}–{g.end:.1f} s" for g in ride.fix_gaps(max_gap)])
     return "\n".join(lines)
+
+
+def _listed(label: str, entries: list[str]) -> list[str]:
+    """Summary lines for `entries`, the first beside `label` and the rest aligned under it; `none` if empty."""
+    first, *rest = entries or ["none"]
+    return [f"{label:<10}{first}", *(f"{'':<10}{entry}" for entry in rest)]
 
 
 @maps_app.command("update")

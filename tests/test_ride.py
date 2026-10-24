@@ -307,3 +307,59 @@ def test_a_payload_sent_twice_is_one_duplicate_time_issue() -> None:
 
     assert [i for i, s in enumerate(ride.samples) if not s.valid] == list(range(30, 40))
     assert [(i.kind, i.start, i.end) for i in ride.issues] == [("duplicate_time", 2.0, pytest.approx(2.9))]
+
+
+def test_fix_gaps_are_reported_from_video_start_between_fixes_and_to_video_end() -> None:
+    # No Fix for the first 2 s and from 5 s to 7 s; the last Sample is at 9.9 s of 12.
+    payloads = riding_north(10)
+    for second in (0, 1, 5, 6):
+        payloads[second] = Payload(sample_time=float(second), fix=0, gps=payloads[second].gps)
+
+    ride = parse_ride(exiftool_text(*payloads), duration=12.0)
+
+    assert [(g.start, g.end) for g in ride.fix_gaps()] == [
+        (0.0, 2.0),
+        (pytest.approx(4.9), 7.0),
+        (pytest.approx(9.9), 12.0),
+    ]
+
+
+def test_pauses_between_samples_under_the_threshold_are_not_fix_gaps() -> None:
+    # A Sample every 0.1 s, the last at 4.9 s of 5.
+    ride = parse_ride(exiftool_text(*riding_north(5)), duration=5.0)
+
+    assert ride.fix_gaps() == []
+
+
+def test_the_fix_gap_threshold_is_configurable() -> None:
+    # A Sample every second, the last at 4 s of 5.
+    ride = parse_ride(exiftool_text(*riding_north(5, rate=1)), duration=5.0)
+
+    assert len(ride.fix_gaps()) == 5
+    assert ride.fix_gaps(max_gap=1.0) == [], "a pause exactly at the threshold isn't longer than it"
+
+
+def test_a_ride_with_no_valid_samples_is_one_fix_gap() -> None:
+    text = exiftool_text(Payload(fix=0, gps=[ROW] * 4))
+
+    ride = parse_ride(text, duration=3.0)
+
+    assert [(g.start, g.end) for g in ride.fix_gaps()] == [(0.0, 3.0)]
+
+
+def test_the_route_geojson_leaves_out_invalid_samples_and_breaks_at_each_fix_gap() -> None:
+    # A Sample a second, ~11 m apart, without a Fix at 2 s, 5 s and 7 s: 6 s and 8 s are alone after gaps.
+    latitudes = [-0.7, -0.6999, -0.6998, -0.6997, -0.6996, -0.6995, -0.6994, -0.6993, -0.6992]
+    payloads = [
+        Payload(sample_time=float(t), fix=0 if t in (2, 5, 7) else 3, gps=[(latitude, 36.9, 1746.0, 40.0)])
+        for t, latitude in enumerate(latitudes)
+    ]
+    ride = parse_ride(exiftool_text(*payloads), duration=9.0)
+
+    route = ride.route_geojson(max_gap=1.5)
+
+    assert route.type == "MultiLineString"
+    assert route.coordinates == [
+        [(36.9, -0.7), (36.9, -0.6999)],
+        [(36.9, -0.6997), (36.9, -0.6996)],
+    ]

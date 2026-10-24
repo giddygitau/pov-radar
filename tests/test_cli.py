@@ -193,6 +193,14 @@ def test_the_reference_clip_is_summarised_and_its_telemetry_written(tmp_path: Pa
     assert 40 <= float(mean[1]) <= 50
     assert "Valid:    950 of 950" in output
     assert "Issues:   none" in output
+    assert "Fix gaps: none" in output
+
+    route = json.loads((tmp_path / "pov-radar" / "GX0710" / "route.geojson").read_text())
+    assert route["type"] == "MultiLineString"
+    (line,) = route["coordinates"]
+    assert len(line) == int(count[1])
+    # Kenya, a little south of the equator.
+    assert all(33 < lon < 42 and -5 < lat < 0 for lon, lat in line)
 
     telemetry = json.loads((tmp_path / "pov-radar" / "GX0710" / "telemetry.json").read_text())
     assert len(telemetry["samples"]) == int(count[1])
@@ -365,3 +373,25 @@ def test_max_speed_sets_the_speed_above_which_a_jump_is_implausible(
     assert code == 0, output
     assert "Valid:    1 of 2" in output
     assert "implausible_jump" in output
+
+
+def test_inspect_reports_fix_gaps_and_writes_the_route_broken_at_them(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, map_cache: Path
+) -> None:
+    source = tmp_path / "GX010001.MP4"
+    source.touch()
+    # A Sample a second, ~11 m apart, for 4 s of a 6 s Chapter, and no Fix at 2 s.
+    ride = chapter_ride(6.0, -0.7, -0.6999, -0.6998, -0.6997)
+    ride.samples[2].fix = 0
+
+    def read_ride(path: Path) -> Ride:
+        return ride
+
+    monkeypatch.setattr(cli, "read_ride", read_ride)
+
+    code, output = inspect(source, "--max-gap", "1.5", input="n\n")
+
+    assert code == 0, output
+    assert "Fix gaps: 1.0–3.0 s\n          3.0–6.0 s\n" in output
+    route = json.loads((tmp_path / "pov-radar" / "GX0001" / "route.geojson").read_text())
+    assert route == {"type": "MultiLineString", "coordinates": [[[36.9, -0.7], [36.9, -0.6999]]]}

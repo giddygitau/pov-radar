@@ -45,6 +45,27 @@ class Issue(BaseModel):
     """Video timeline seconds of the last rejected Sample."""
 
 
+class FixGap(BaseModel):
+    """A stretch of the Video timeline with no valid Samples."""
+
+    start: float
+    """Video timeline seconds of the last valid Sample before it, or 0 at the start of the Ride."""
+    end: float
+    """Video timeline seconds of the first valid Sample after it, or the Ride's duration at its end."""
+
+
+class MultiLineString(BaseModel):
+    """A GeoJSON MultiLineString geometry."""
+
+    type: Literal["MultiLineString"] = "MultiLineString"
+    coordinates: list[list[tuple[float, float]]]
+    """Lines of (longitude, latitude) positions."""
+
+
+MAX_GAP = 0.5
+"""Seconds without a valid Sample longer than which, by default, there is a Fix gap."""
+
+
 class Ride(BaseModel):
     duration: float
     """Seconds of footage on the Video timeline."""
@@ -55,6 +76,26 @@ class Ride(BaseModel):
     @property
     def valid_samples(self) -> list[Sample]:
         return [s for s in self.samples if s.valid]
+
+    def fix_gaps(self, max_gap: float = MAX_GAP) -> list[FixGap]:
+        """Stretches longer than `max_gap` seconds without a valid Sample, from video start to video end."""
+        times = [0.0, *(s.time for s in self.valid_samples), self.duration]
+        return [FixGap(start=a, end=b) for a, b in zip(times, times[1:]) if b - a > max_gap]
+
+    def route_geojson(self, max_gap: float = MAX_GAP) -> MultiLineString:
+        """The valid Samples as lines broken at every Fix gap, so none is drawn across unknown ground.
+
+        A Sample alone between Fix gaps makes no line and is left out.
+        """
+        lines: list[list[Sample]] = []
+        for sample in self.valid_samples:
+            if lines and sample.time - lines[-1][-1].time <= max_gap:
+                lines[-1].append(sample)
+            else:
+                lines.append([sample])
+        return MultiLineString(
+            coordinates=[[(s.longitude, s.latitude) for s in line] for line in lines if len(line) > 1]
+        )
 
 
 KMH_PER_MS = 3.6
