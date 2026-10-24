@@ -1,0 +1,27 @@
+# Personal footage and derived data — never commit (contains GPS location history)
+input/
+cache/
+output/
+pov-radar/
+*.MP4
+*.mp4
+*.mov
+*.MOV
+*.gpx
+*.osm.pbf
+
+# Python / uv
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+dist/
+build/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
