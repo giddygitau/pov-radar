@@ -17,7 +17,7 @@ _TOOLS = {"exiftool": "brew install exiftool", "ffprobe": "brew install ffmpeg"}
 
 
 def read_ride(path: Path) -> Ride:
-    """Build the Ride for a single Chapter; joining a Recording's Chapters comes later."""
+    """Build the Ride for a single Chapter, on its own timeline from 0; `join` puts Chapters together."""
     tools = {name: _require(name, install) for name, install in _TOOLS.items()}
     duration = _probe_video(tools["ffprobe"], path)
     try:

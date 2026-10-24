@@ -104,6 +104,16 @@ def parse_ride(text: str, duration: float) -> Ride:
     return Ride(duration=duration, samples=samples, issues=_validate(samples))
 
 
+def join(chapters: list[Ride]) -> Ride:
+    """Join a Recording's Chapter Rides end to end, each offset by the durations of those before it."""
+    samples: list[Sample] = []
+    offset = 0.0
+    for chapter in chapters:
+        samples += [s.model_copy(update={"time": s.time + offset}) for s in chapter.samples]
+        offset += chapter.duration
+    return Ride(duration=offset, samples=samples, issues=_validate(samples))
+
+
 MIN_FIX = 2
 """The lowest GPSMeasureMode with a trustworthy position: a two-dimensional Fix."""
 

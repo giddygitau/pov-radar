@@ -4,7 +4,7 @@ from typing import Literal
 
 import pytest
 
-from pov_radar.ride import TelemetryError, parse_ride
+from pov_radar.ride import TelemetryError, join, parse_ride
 
 GPS_COLUMNS = ["GPSLatitude", "GPSLongitude", "GPSAltitude", "GPSSpeed"]
 
@@ -178,3 +178,23 @@ def test_samples_with_no_fix_information_count_as_valid() -> None:
 
     assert [(s.fix, s.valid) for s in ride.samples] == [(None, True), (None, True)]
     assert ride.issues == []
+
+
+def test_chapters_join_onto_one_timeline_each_offset_by_the_durations_before_it() -> None:
+    first = parse_ride(exiftool_text(Payload(sample_time=0.0, gps=[ROW] * 2)), duration=1.5)
+    second = parse_ride(exiftool_text(Payload(sample_time=0.0, gps=[ROW] * 2)), duration=2.0)
+    third = parse_ride(exiftool_text(Payload(sample_time=0.5, gps=[ROW] * 2)), duration=1.0)
+
+    ride = join([first, second, third])
+
+    assert [s.time for s in ride.samples] == [0.0, 0.5, 1.5, 2.0, 4.0, 4.5]
+    assert ride.duration == 4.5
+
+
+def test_a_run_of_invalid_samples_across_a_chapter_boundary_is_one_issue() -> None:
+    first = parse_ride(exiftool_text(Payload(gps=[ROW, ROW]), Payload(sample_time=1.0, fix=0, gps=[ROW] * 2)), 2.0)
+    second = parse_ride(exiftool_text(Payload(fix=0, gps=[ROW] * 2), Payload(sample_time=1.0, gps=[ROW] * 2)), 2.0)
+
+    ride = join([first, second])
+
+    assert [(i.kind, i.start, i.end) for i in ride.issues] == [("no_fix", 1.0, 2.5)]
