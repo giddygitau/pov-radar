@@ -126,12 +126,12 @@ def test_an_unrecognised_payload_label_is_an_error_not_skipped() -> None:
         parse_ride(text, duration=1.0)
 
 
-def test_a_clean_track_has_every_sample_usable_and_no_issues() -> None:
+def test_a_clean_track_has_every_sample_valid_and_no_issues() -> None:
     text = exiftool_text(Payload(gps=[ROW] * 4), Payload(sample_time=1.0, gps=[ROW] * 4))
 
     ride = parse_ride(text, duration=2.0)
 
-    assert all(s.usable for s in ride.samples)
+    assert all(s.valid for s in ride.samples)
     assert ride.issues == []
 
 
@@ -145,7 +145,7 @@ def test_a_run_of_samples_below_a_2d_fix_is_one_issue_spanning_their_times(fix: 
 
     ride = parse_ride(text, duration=3.0)
 
-    assert [s.usable for s in ride.samples] == [False] * 6 + [True] * 2
+    assert [s.valid for s in ride.samples] == [False] * 6 + [True] * 2
     assert [(i.kind, i.start, i.end) for i in ride.issues] == [("no_fix", 0.0, 1.5)]
 
 
@@ -159,22 +159,22 @@ def test_a_sample_with_impossible_coordinates_is_rejected(latitude: float, longi
 
     ride = parse_ride(text, duration=1.0)
 
-    assert [s.usable for s in ride.samples] == [True, False, True, True]
+    assert [s.valid for s in ride.samples] == [True, False, True, True]
     assert [(i.kind, i.start, i.end) for i in ride.issues] == [("invalid_coordinates", 0.25, 0.25)]
 
 
-def test_coordinates_on_the_equator_or_prime_meridian_alone_are_usable() -> None:
+def test_coordinates_on_the_equator_or_prime_meridian_alone_are_valid() -> None:
     text = exiftool_text(Payload(gps=[(0.0, 36.9, 1746.0, 36.0), (-0.7, 0.0, 1746.0, 36.0)]))
 
     ride = parse_ride(text, duration=1.0)
 
-    assert all(s.usable for s in ride.samples)
+    assert all(s.valid for s in ride.samples)
 
 
-def test_samples_with_no_fix_information_count_as_usable() -> None:
+def test_samples_with_no_fix_information_count_as_valid() -> None:
     text = exiftool_text(Payload(fix=None, gps=[ROW] * 2))
 
     ride = parse_ride(text, duration=1.0)
 
-    assert [(s.fix, s.usable) for s in ride.samples] == [(None, True), (None, True)]
+    assert [(s.fix, s.valid) for s in ride.samples] == [(None, True), (None, True)]
     assert ride.issues == []

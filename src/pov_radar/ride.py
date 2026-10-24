@@ -25,7 +25,7 @@ class Sample(BaseModel):
     """GPS fix state: 0 none, 2 two-dimensional, 3 three-dimensional; None if the payload doesn't say."""
     precision: float
     """Horizontal dilution of precision; under 5 is good."""
-    usable: bool = True
+    valid: bool = True
     """Whether validation trusts this Sample's position."""
 
 
@@ -48,7 +48,7 @@ class Ride(BaseModel):
     """Seconds of footage on the Video timeline."""
     samples: list[Sample]
     issues: list[Issue] = []
-    """Runs of unusable Samples, in Track order."""
+    """Runs of invalid Samples, in Track order."""
 
 
 KMH_PER_MS = 3.6
@@ -109,12 +109,12 @@ MIN_FIX = 2
 
 
 def _validate(samples: list[Sample]) -> list[Issue]:
-    """Mark untrustworthy Samples unusable, reporting each run of one rejection kind as an Issue."""
+    """Mark untrustworthy Samples invalid, reporting each run of one rejection kind as an Issue."""
     issues: list[Issue] = []
     for kind, group in groupby(samples, _rejection):
         run = list(group)
         for sample in run:
-            sample.usable = kind is None
+            sample.valid = kind is None
         if kind is not None:
             issues.append(Issue(kind=kind, start=run[0].time, end=run[-1].time))
     return issues

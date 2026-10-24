@@ -35,8 +35,8 @@ def inspect(
         raise typer.Exit(1) from error
 
     typer.echo(_summary(ride))
-    if not any(s.usable for s in ride.samples):
-        typer.echo(f"Error: {source.name} has no usable Samples; there is nothing to map", err=True)
+    if not any(s.valid for s in ride.samples):
+        typer.echo(f"Error: {source.name} has no valid Samples; there is nothing to map", err=True)
         raise typer.Exit(1)
 
     out = out or _default_out(source)
@@ -52,14 +52,14 @@ def _default_out(source: Path) -> Path:
 
 
 def _summary(ride: Ride) -> str:
-    usable = [s for s in ride.samples if s.usable]
+    valid = [s for s in ride.samples if s.valid]
     lines = [
         f"Duration: {ride.duration:.1f} s",
         f"Samples:  {len(ride.samples)} at {len(ride.samples) / ride.duration:.1f} Hz",
-        f"Usable:   {len(usable)} of {len(ride.samples)}",
+        f"Valid:    {len(valid)} of {len(ride.samples)}",
     ]
-    if usable:
-        speeds = [s.speed * KMH_PER_MS for s in usable]
+    if valid:
+        speeds = [s.speed * KMH_PER_MS for s in valid]
         lines.append(f"Speed:    {min(speeds):.0f}–{max(speeds):.0f} km/h, mean {fmean(speeds):.0f} km/h")
     issues = [f"{i.kind} {i.start:.1f}–{i.end:.1f} s" for i in ride.issues] or ["none"]
     lines += [f"Issues:   {issues[0]}", *(f"          {issue}" for issue in issues[1:])]

@@ -28,7 +28,7 @@ Turn a GoPro HERO10 Black Ride into two transparent Overlays — a rotating Mini
 
 - Extract with an established tool/library (exiftool is verified to read the reference clip); reconstruct per-Sample time by distributing each payload's Samples across its MP4 sample duration on the Video timeline.
 - Validate: invalid/zero coordinates, no-Fix Samples, duplicate or non-monotonic times, Fix gaps, implausible jumps (speed-based), outliers that would distort Overview framing.
-- Report affected time ranges; continue with valid portions. Fail clearly if there are no usable Samples.
+- Report affected time ranges; continue with valid portions. Fail clearly if there are no valid Samples.
 - Optional explicit time offset (config/CLI), recorded in run metadata.
 
 ## Route model

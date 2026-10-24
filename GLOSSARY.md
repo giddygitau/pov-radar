@@ -35,7 +35,7 @@ The camera's state of having a valid satellite position; Samples without one car
 _Avoid_: Lock, signal
 
 **Issue**:
-A run of consecutive Samples rejected as unusable for the same reason (e.g. no Fix, impossible coordinates), reported with its time range.
+A run of consecutive Samples rejected as invalid for the same reason (e.g. no Fix, impossible coordinates), reported with its time range.
 _Avoid_: Error, warning, problem
 
 **Fix gap**:
