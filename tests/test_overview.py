@@ -173,3 +173,18 @@ def test_during_a_long_fix_gap_the_dot_holds_dimmed_at_the_last_position(request
     assert held[row, column, :3].max() < 200, "dimmed at the corner during the gap"
     assert int(held[row, column, 0]) > int(held[row + 20, column - 20, 0]), "but still brighter than the bare surface"
     assert_matches_golden(held, "dot-held-dimmed", request)
+
+
+def test_the_openstreetmap_credit_can_be_burnt_in_along_the_bottom(request: pytest.FixtureRequest) -> None:
+    network = roads(SQUARE, SQUARE_ROADS)
+    plain = Overview(SQUARE, FRAME_HEIGHT).render(network)
+
+    credited = Overview(SQUARE, FRAME_HEIGHT, credit=True).render(network)
+
+    changed = np.argwhere(np.abs(credited.astype(int) - plain.astype(int)).max(axis=2) > 40)
+    (top, left), (bottom, right) = changed.min(axis=0), changed.max(axis=0)
+    height, width, _ = plain.shape
+    assert height - 30 < top and bottom < height - 4, "a line of small text just above the bottom edge"
+    assert width / 3 < left and right < width - 8, "in the bottom-right corner, inside the rounded edge"
+    assert np.array_equal(credited[: height - 30], plain[: height - 30]), "nothing else changes"
+    assert_matches_golden(credited, "credit", request)

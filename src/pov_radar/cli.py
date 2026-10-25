@@ -1,22 +1,27 @@
 """The `pov-radar` command line."""
 
 from collections.abc import Callable
-from functools import cache, partial
+from functools import cache
+from importlib.metadata import version
 from pathlib import Path
 from statistics import fmean
-from typing import Annotated
+from typing import Annotated, Any, Literal
 
 import typer
+import yaml
 from pydantic import BaseModel
 
 from pov_radar import maps
 from pov_radar.chapter import ChapterError, read_ride
+from pov_radar.config import DEFAULT_PATH, Config, ConfigError, Placed, config_file, given, load_config
 from pov_radar.recording import DiscoveryError, Recording, discover
-from pov_radar.ride import KMH_PER_MS, MAX_GAP, MAX_INTERPOLATED_GAP, MAX_SPEED, HeadingSmoothing, Ride, join
+from pov_radar.ride import KMH_PER_MS, Ride, join
 from pov_radar.drawing import write_png
 from pov_radar.minimap import Minimap
 from pov_radar.overview import Overview
-from pov_radar.roads import MINIMAP_REACH, MapData, RoadClass, RoadNetwork
+from pov_radar.placement import Placement, PlacementError, in_frame, place
+from pov_radar.maps import ATTRIBUTION
+from pov_radar.roads import MapData, RoadClass, RoadNetwork
 from pov_radar.video import OverlayWriter, VideoError, read_frames
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
@@ -36,9 +41,49 @@ class MapRecord(BaseModel):
     """Roads around the Ride, by class."""
 
 
+class OverlayRecord(BaseModel):
+    """An Overlay as rendered."""
+
+    file: str
+    """Its name, in the folder beside this record."""
+    full_frame: bool
+    """Whether the file is the footage's size with the map in place, or cropped to the map."""
+    placement: Placement
+    """Where the map goes on the footage."""
+
+
+class FrameRecord(BaseModel):
+    """The footage's frames, which the Overlays are placed on."""
+
+    width: int
+    height: int
+    """Pixels."""
+    rate: str
+    """Frames per second, exactly, e.g. `30000/1001`."""
+
+
+class RenderRecord(BaseModel):
+    """What `render.json` holds: how to place each Overlay on the footage, and how the run made them."""
+
+    version: str
+    """pov-radar's version."""
+    frame: FrameRecord
+    """The footage's frames."""
+    overlays: dict[str, OverlayRecord]
+    """Each Overlay rendered, by name."""
+    time_offset: float
+    """Seconds the telemetry was moved later on the Video timeline."""
+    map: MapRecord | None
+    """None when there was no map data."""
+    config: dict[str, Any]
+    """The effective config, as a config file would give it."""
+
+
 class Telemetry(Ride):
     """What `telemetry.json` holds: the Ride, and the map data its roads came from."""
 
+    time_offset: float
+    """Seconds every Sample and Issue was moved later on the Video timeline from where the camera put it."""
     map: MapRecord | None
     """None when there was no map data."""
 
@@ -66,83 +111,168 @@ Out = Annotated[
         "[default: pov-radar/<recording>/ beside the source]"
     ),
 ]
+ConfigFile = Annotated[
+    Path | None,
+    typer.Option(
+        "--config",
+        help=f"YAML config file, overriding the built-in defaults; options override it [default: {DEFAULT_PATH} "
+        "in the working directory, if there is one]",
+    ),
+]
+_FROM_CONFIG = "[default: from the config]"
+"""Each option overrides the config, whose limits it shares, so it shows no default or limits of its own."""
 MaxSpeed = Annotated[
-    float,
-    typer.Option(help="Km/h faster than which the motorcycle can't have moved between Samples", min=0),
+    float | None,
+    typer.Option(help=f"Km/h faster than which the motorcycle can't have moved between Samples {_FROM_CONFIG}"),
 ]
 MaxGap = Annotated[
-    float,
-    typer.Option(help="Seconds without a valid Sample longer than which there is a Fix gap", min=0),
+    float | None,
+    typer.Option(help=f"Seconds without a valid Sample longer than which there is a Fix gap {_FROM_CONFIG}"),
+]
+TimeOffset = Annotated[
+    float | None,
+    typer.Option(
+        help=f"Seconds to move the telemetry later on the Video timeline, when the map runs ahead of the footage; "
+        f"negative when it lags {_FROM_CONFIG}"
+    ),
 ]
 MaxInterpolatedGap = Annotated[
-    float,
+    float | None,
     typer.Option(
         help="Seconds of Fix gap across which the Current position is interpolated; "
-        "across longer ones it holds, dimmed, at the last valid Sample",
-        min=0,
+        f"across longer ones it holds, dimmed, at the last valid Sample {_FROM_CONFIG}",
     ),
 ]
 HeadingWindow = Annotated[
-    float,
-    typer.Option(help="Seconds of travel, centred on each frame, whose overall direction is the Heading", min=0.01),
+    float | None,
+    typer.Option(
+        help=f"Seconds of travel, centred on each frame, whose overall direction is the Heading {_FROM_CONFIG}",
+    ),
 ]
 HeadingMinSpeed = Annotated[
-    float,
-    typer.Option(help="Km/h below which the Heading holds at the last moment the motorcycle was faster", min=0),
+    float | None,
+    typer.Option(
+        help=f"Km/h below which the Heading holds at the last moment the motorcycle was faster {_FROM_CONFIG}"
+    ),
+]
+FullFrame = Annotated[
+    bool | None,
+    typer.Option(
+        "--full-frame/--cropped",
+        help=f"Draw each Overlay in place on a transparent frame the footage's size, or crop it to its map "
+        f"{_FROM_CONFIG}",
+        show_default=False,
+    ),
+]
+Attribution = Annotated[
+    Literal["file", "burn_in"] | None,
+    typer.Option(
+        help=f"Credit OpenStreetMap in ATTRIBUTION.txt only, or burn it into the Overview too {_FROM_CONFIG}",
+    ),
 ]
 
 
 @app.command()
 def inspect(
-    sources: Sources, out: Out = None, max_speed: MaxSpeed = MAX_SPEED * KMH_PER_MS, max_gap: MaxGap = MAX_GAP
+    sources: Sources,
+    out: Out = None,
+    config: ConfigFile = None,
+    max_speed: MaxSpeed = None,
+    max_gap: MaxGap = None,
+    time_offset: TimeOffset = None,
 ) -> None:
     """Summarise each Ride's GPS telemetry and write its telemetry.json, route.geojson and an Overview preview.png."""
-    _each_ride(sources, out, max_speed / KMH_PER_MS, max_gap, lambda recording, folder, inspected: True)
-
-
-Renderer = Callable[[Ride, int], Overview | Minimap]
-"""An Overlay's Renderer, made for a Ride and the height of its footage's frames."""
+    telemetry = {"max_speed": max_speed, "max_gap": max_gap, "time_offset": time_offset}
+    settings = _config(config, {"telemetry": telemetry})
+    _each_ride(sources, out, settings, lambda recording, folder, inspected: True)
 
 
 @app.command()
 def render(
     sources: Sources,
     out: Out = None,
-    max_speed: MaxSpeed = MAX_SPEED * KMH_PER_MS,
-    max_gap: MaxGap = MAX_GAP,
-    max_interpolated_gap: MaxInterpolatedGap = MAX_INTERPOLATED_GAP,
-    heading_window: HeadingWindow = HeadingSmoothing.window,
-    heading_min_speed: HeadingMinSpeed = HeadingSmoothing.min_speed * KMH_PER_MS,
+    config: ConfigFile = None,
+    max_speed: MaxSpeed = None,
+    max_gap: MaxGap = None,
+    time_offset: TimeOffset = None,
+    max_interpolated_gap: MaxInterpolatedGap = None,
+    heading_window: HeadingWindow = None,
+    heading_min_speed: HeadingMinSpeed = None,
+    full_frame: FullFrame = None,
+    attribution: Attribution = None,
     overview: Annotated[bool, typer.Option(help="Render overview.mov")] = True,
     minimap: Annotated[bool, typer.Option(help="Render minimap.mov")] = True,
 ) -> None:
     """Inspect each Ride, as `inspect` does, then render its Overlays, overview.mov and minimap.mov, as transparent
-    videos."""
-    chosen: dict[str, Renderer] = {}
-    if overview:
-        chosen["overview"] = Overview
-    if minimap:
-        chosen["minimap"] = Minimap
+    videos, with render.json saying where they go on the footage and ATTRIBUTION.txt crediting the map data."""
+    chosen = [name for name, wanted in (("overview", overview), ("minimap", minimap)) if wanted]
     if not chosen:
         typer.echo("Error: --no-overview and --no-minimap leave nothing to render", err=True)
         raise typer.Exit(1)
-    heading = HeadingSmoothing(window=heading_window, min_speed=heading_min_speed / KMH_PER_MS)
-    render_ride = partial(_render, overlays=chosen, max_interpolated_gap=max_interpolated_gap, heading=heading)
-    _each_ride(sources, out, max_speed / KMH_PER_MS, max_gap, render_ride)
+    options = {
+        "telemetry": {
+            "max_speed": max_speed,
+            "max_gap": max_gap,
+            "time_offset": time_offset,
+            "max_interpolated_gap": max_interpolated_gap,
+        },
+        "heading": {"window": heading_window, "min_speed": heading_min_speed},
+        "full_frame": full_frame,
+        "attribution": attribution,
+    }
+    settings = _config(config, options, log=True)
+    _each_ride(
+        sources,
+        out,
+        settings,
+        lambda recording, folder, inspected: _render(recording, folder, inspected, chosen, settings),
+    )
+
+
+def _config(path: Path | None, options: dict[str, Any], log: bool = False) -> Config:
+    """The effective config, from the defaults, the config file and the options given, echoed first if `log`;
+    exiting 1 if it has a bad value."""
+    path = config_file(path)
+    try:
+        config = load_config(path, options)
+    except ConfigError as error:
+        typer.echo(f"Error: {error}", err=True)
+        raise typer.Exit(1) from error
+    if log:
+        sources = ["built-in defaults", *([str(path)] if path else []), *(["options"] if given(options) else [])]
+        typer.echo(f"Config: {', '.join(sources)}")
+        dumped = yaml.safe_dump(config.dumped(), sort_keys=False, allow_unicode=True)
+        typer.echo("".join(f"  {line}\n" for line in dumped.splitlines()))
+    return config
+
+
+
+
+Renderer = Callable[[Ride, int, Config], tuple[Overview | Minimap, Placed]]
+"""An Overlay's Renderer, made for a Ride, the height of its footage's frames and the config, with the config's
+placement for it."""
+
+RENDERERS: dict[str, Renderer] = {
+    "overview": lambda ride, height, config: (
+        Overview(ride, height, config.style, credit=config.attribution == "burn_in"),
+        config.overview,
+    ),
+    "minimap": lambda ride, height, config: (Minimap(ride, height, config.style, config.minimap.reach), config.minimap),
+}
 
 
 class Inspected(BaseModel, arbitrary_types_allowed=True):
-    """A Ride that passed inspection, and the roads around it."""
+    """A Ride that passed inspection, the roads around it, and the map data they came from."""
 
     ride: Ride
     roads: RoadNetwork
+    map: MapRecord | None
 
 
 def _each_ride(
     sources: list[Path],
     out: Path | None,
-    max_speed: float,
-    max_gap: float,
+    config: Config,
     then: Callable[[Recording, Path, Inspected], bool],
 ) -> None:
     """Inspect the Ride of each Recording found in `sources`, then do `then` with it, exiting 1 if any failed."""
@@ -163,23 +293,24 @@ def _each_ride(
             folder = recording.chapters[0].parent / "pov-radar" / recording.name
         else:
             folder = out / recording.name if len(recordings) > 1 else out
-        inspected = _inspect(recording, folder, map_data, max_speed, max_gap)
+        inspected = _inspect(recording, folder, map_data, config)
         failed |= inspected is None or not then(recording, folder, inspected)
     if failed:
         raise typer.Exit(1)
 
 
 def _inspect(
-    recording: Recording, out: Path, map_data: Callable[[], MapData | None], max_speed: float, max_gap: float
+    recording: Recording, out: Path, map_data: Callable[[], MapData | None], config: Config
 ) -> Inspected | None:
-    """Report one Ride and write its telemetry and Route, `max_speed` in metres per second and `max_gap` in
-    seconds; None if it couldn't be."""
+    """Report one Ride, its telemetry moved by the config's time offset, and write its telemetry and Route; None if
+    it couldn't be."""
+    max_speed, max_gap = config.telemetry.max_speed / KMH_PER_MS, config.telemetry.max_gap
     typer.echo(f"{recording.name}: {', '.join(path.name for path in recording.chapters)}")
     if recording.missing:
         plural = "s" if len(recording.missing) > 1 else ""
         typer.echo(f"Warning: {recording.name} is missing chapter{plural} {_ranges(recording.missing)}", err=True)
     try:
-        ride = join([read_ride(path) for path in recording.chapters], max_speed)
+        ride = join([read_ride(path) for path in recording.chapters], max_speed).shifted(config.telemetry.time_offset)
     except ChapterError as error:
         typer.echo(f"Error: {error}", err=True)
         return None
@@ -189,12 +320,12 @@ def _inspect(
         typer.echo(f"Error: {recording.name} has no valid Samples; there is nothing to map", err=True)
         return None
 
-    overview = Overview(ride, PREVIEW_FRAME_HEIGHT)
+    overview = Overview(ride, PREVIEW_FRAME_HEIGHT, config.style)
     record = None
     roads = RoadNetwork([])
     if loaded := map_data():
         record = MapRecord(extract=loaded.extract.name, date=loaded.date, roads=loaded.roads_around(ride).counts())
-        roads = loaded.roads_around(ride, margin=max(MINIMAP_REACH, overview.reach))
+        roads = loaded.roads_around(ride, margin=max(config.minimap.reach, overview.reach))
         counts = ", ".join(f"{count} {road_class}" for road_class, count in record.roads.items())
         typer.echo(f"Roads:    {counts} (OpenStreetMap, {_date(loaded)})")
     else:
@@ -202,7 +333,8 @@ def _inspect(
 
     out.mkdir(parents=True, exist_ok=True)
     telemetry = out / "telemetry.json"
-    telemetry.write_text(Telemetry(**ride.model_dump(), map=record).model_dump_json(indent=2))
+    written = Telemetry(**ride.model_dump(), time_offset=config.telemetry.time_offset, map=record)
+    telemetry.write_text(written.model_dump_json(indent=2))
     typer.echo(f"Wrote {telemetry}")
     route = out / "route.geojson"
     route.write_text(ride.route_geojson(max_gap).model_dump_json())
@@ -210,36 +342,50 @@ def _inspect(
     preview = out / "preview.png"
     write_png(overview.render(roads), preview)
     typer.echo(f"Wrote {preview}")
-    return Inspected(ride=ride, roads=roads)
+    return Inspected(ride=ride, roads=roads, map=record)
 
 
-def _render(
-    recording: Recording,
-    out: Path,
-    inspected: Inspected,
-    overlays: dict[str, Renderer],
-    max_interpolated_gap: float,
-    heading: HeadingSmoothing,
-) -> bool:
-    """Render each Overlay, as `<name>.mov`, frame for frame with the Ride's footage, interpolating across Fix gaps
-    of up to `max_interpolated_gap` seconds and smoothing the Heading by `heading`; False if any couldn't be."""
-    ride = inspected.ride
+def _render(recording: Recording, out: Path, inspected: Inspected, overlays: list[str], config: Config) -> bool:
+    """Render each named Overlay, as `<name>.mov`, frame for frame with the Ride's footage, then render.json
+    recording where each goes and ATTRIBUTION.txt; False if any couldn't be."""
+    ride, telemetry = inspected.ride, config.telemetry
+    heading = config.heading.smoothing()
+    records: dict[str, OverlayRecord] = {}
     try:
         frames = read_frames(recording.chapters)
-        for name, renderer in overlays.items():
+        for name in overlays:
             path = out / f"{name}.mov"
-            overlay = renderer(ride, frames.height)
+            overlay, placed = RENDERERS[name](ride, frames.height, config)
+            placement = place(placed.corner, placed.margin, overlay.width, overlay.height, frames.size)
             draw = overlay.frames(inspected.roads)
+            size = frames.size if config.full_frame else (overlay.width, overlay.height)
             with (
-                OverlayWriter(path, overlay.width, overlay.height, frames.rate) as writer,
+                OverlayWriter(path, *size, frames.rate) as writer,
                 typer.progressbar(range(frames.count), label=f"Rendering {path.name}", show_percent=True) as bar,
             ):
                 for frame in bar:
-                    writer.write(draw(ride.at(float(frame / frames.rate), max_interpolated_gap, heading)))
+                    image = draw(ride.at(float(frame / frames.rate), telemetry.max_interpolated_gap, heading))
+                    writer.write(in_frame(image, placement, frames.size) if config.full_frame else image)
             typer.echo(f"Wrote {path}")
-    except VideoError as error:
+            records[name] = OverlayRecord(file=path.name, full_frame=config.full_frame, placement=placement)
+    except (VideoError, PlacementError) as error:
         typer.echo(f"Error: {error}", err=True)
         return False
+
+    record = RenderRecord(
+        version=version("pov-radar"),
+        frame=FrameRecord(width=frames.width, height=frames.height, rate=str(frames.rate)),
+        overlays=records,
+        time_offset=telemetry.time_offset,
+        map=inspected.map,
+        config=config.dumped(),
+    )
+    sidecar = out / "render.json"
+    sidecar.write_text(record.model_dump_json(indent=2))
+    typer.echo(f"Wrote {sidecar}")
+    attribution = out / "ATTRIBUTION.txt"
+    attribution.write_text(ATTRIBUTION)
+    typer.echo(f"Wrote {attribution}; credit OpenStreetMap wherever the Overlays are shown")
     return True
 
 

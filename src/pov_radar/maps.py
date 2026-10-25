@@ -11,6 +11,14 @@ from urllib.request import urlopen
 
 EXTRACT_URL = "https://download.geofabrik.de/africa/kenya-latest.osm.pbf"
 
+CREDIT = "© OpenStreetMap contributors"
+"""The credit OpenStreetMap's licence asks for wherever its data is shown."""
+
+ATTRIBUTION = f"""Map data {CREDIT}.
+Available under the Open Database License: https://www.openstreetmap.org/copyright
+"""
+"""What ATTRIBUTION.txt beside the Overlays says."""
+
 
 class DownloadError(Exception):
     """The extract can't be fetched; the message says why."""

@@ -128,3 +128,13 @@ def assert_points_up(image: np.ndarray) -> None:
     assert CURRENT[0] - rows.min() > 1.2 * (rows.max() - CURRENT[0]), "longer above the Current position than below"
     width = {row: (rows == row).sum() for row in (CURRENT[0] - 12, CURRENT[0] + 8)}
     assert width[CURRENT[0] - 12] < width[CURRENT[0] + 8], "narrow at the tip, wide at the back"
+
+
+def test_the_reach_zooms_the_minimap() -> None:
+    # A mid road crosses 100 m ahead; with 125 m rather than 250 m to the top edge, it is twice as far up.
+    crossing = roads(NORTH, [("mid", [(-1.0, 0.1), (1.0, 0.1)])])
+    image = Minimap(NORTH, FRAME_HEIGHT, reach=125.0).frames(crossing)(NORTH.at(50.0))
+
+    brightness = image[:, CURRENT[1] - 20, :3].astype(int).sum(axis=1)
+    ahead = round(CURRENT[0] - 100 * PX_PER_METRE * 2)
+    assert brightness[ahead] > brightness[ahead + 15] + 150

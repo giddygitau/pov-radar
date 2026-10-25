@@ -13,17 +13,18 @@ from pov_radar.style import Style
 
 
 class Minimap:
-    """The Minimap's size and scale for a Ride: the marker below centre, `MINIMAP_REACH` metres from the top edge."""
+    """The Minimap's size and scale for a Ride: the marker below centre, `reach` metres from the top edge."""
 
-    def __init__(self, ride: Ride, frame_height: int, style: Style | None = None) -> None:
+    def __init__(self, ride: Ride, frame_height: int, style: Style | None = None, reach: float = MINIMAP_REACH) -> None:
         del ride  # Every Ride's Minimap is the same size; its frame states give the Heading.
         self.style = style or Style()
+        self.reach = reach
         self.frame_height = frame_height
         self.width = self.height = round(self.style.minimap_diameter * frame_height)
         self._radius = self.width / 2
         self._marker = (self._radius, self._radius * (1 + self.style.minimap_bias))
         """Where the Current position is drawn, in pixels."""
-        self._scale = (self._radius + self._radius * self.style.minimap_bias) / MINIMAP_REACH
+        self._scale = (self._radius + self._radius * self.style.minimap_bias) / reach
         """Pixels per metre."""
 
     def frames(self, roads: RoadNetwork) -> Callable[[FrameState], NDArray[np.uint8]]:
@@ -60,13 +61,13 @@ class Minimap:
             canvas.rotate(state.heading)  # then turned anticlockwise by the Heading, so it is up.
             canvas.translate(-here[0], -here[1])
             for near, paint in classes:
-                for road in near.around(here, MINIMAP_REACH):
+                for road in near.around(here, self.reach):
                     canvas.drawPath(road, paint)
             draw_route(
                 canvas,
                 s,
-                _near(state.completed, here, MINIMAP_REACH),
-                _near(state.upcoming, here, MINIMAP_REACH),
+                _near(state.completed, here, self.reach),
+                _near(state.upcoming, here, self.reach),
                 s.route_width * h / self._scale,
                 s.minimap_glow_blur * h / self._scale,
             )

@@ -177,6 +177,15 @@ class Ride(BaseModel):
             coordinates=[[(s.longitude, s.latitude) for s in line] for line in lines if len(line) > 1]
         )
 
+    def shifted(self, seconds: float) -> "Ride":
+        """The Ride with its telemetry `seconds` later on the Video timeline, to line up GPS that runs early (or,
+        negative, late); the footage, and so the duration, are unchanged."""
+        return Ride(
+            duration=self.duration,
+            samples=[s.model_copy(update={"time": s.time + seconds}) for s in self.samples],
+            issues=[i.model_copy(update={"start": i.start + seconds, "end": i.end + seconds}) for i in self.issues],
+        )
+
     @cached_property
     def projection(self) -> LocalProjection:
         """Local metres centred on the valid Samples, shared by everything drawn for the Ride."""

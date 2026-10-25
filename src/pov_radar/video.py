@@ -25,31 +25,38 @@ class Frames:
     rate: Fraction
     """Frames per second, exactly, e.g. 30000/1001."""
     count: int
+    width: int
     height: int
     """Pixels."""
 
+    @property
+    def size(self) -> tuple[int, int]:
+        """Width and height in pixels."""
+        return self.width, self.height
+
 
 def read_frames(chapters: list[Path]) -> Frames:
-    """The frame rate, total frame count and height of the Chapters' video streams, which must share a rate and
-    height for one Overlay to span them."""
+    """The frame rate, total frame count and size of the Chapters' video streams, which must share a rate and size
+    for one Overlay to span them."""
     probed = [_probe_frames(path) for path in chapters]
-    formats = {(rate, height) for rate, _, height in probed}
+    formats = {(rate, width, height) for rate, _, width, height in probed}
     if len(formats) > 1:
         found = ", ".join(
-            f"{path.name} {height}p at {float(rate):.3f} fps" for path, (rate, _, height) in zip(chapters, probed)
+            f"{path.name} {width}×{height} at {float(rate):.3f} fps"
+            for path, (rate, _, width, height) in zip(chapters, probed)
         )
         raise VideoError(f"The Chapters differ in frame rate or size, so one Overlay can't span them: {found}")
-    ((rate, height),) = formats
-    return Frames(rate=rate, count=sum(count for _, count, _ in probed), height=height)
+    ((rate, width, height),) = formats
+    return Frames(rate=rate, count=sum(count for _, count, _, _ in probed), width=width, height=height)
 
 
-def _probe_frames(path: Path) -> tuple[Fraction, int, int]:
-    """A Chapter's frame rate, frame count and height."""
+def _probe_frames(path: Path) -> tuple[Fraction, int, int, int]:
+    """A Chapter's frame rate, frame count, width and height."""
     result = subprocess.run(
         [
             _require("ffprobe"),
             *("-v", "error", "-select_streams", "v:0", "-of", "json"),
-            *("-show_entries", "stream=r_frame_rate,nb_frames,height"),
+            *("-show_entries", "stream=r_frame_rate,nb_frames,width,height"),
             str(path),
         ],
         capture_output=True,
@@ -59,7 +66,7 @@ def _probe_frames(path: Path) -> tuple[Fraction, int, int]:
     if result.returncode != 0 or not streams:
         raise VideoError(f"ffprobe could not read the frames of {path.name}: {result.stderr.strip()}")
     stream = streams[0]
-    return Fraction(stream["r_frame_rate"]), int(stream["nb_frames"]), int(stream["height"])
+    return Fraction(stream["r_frame_rate"]), int(stream["nb_frames"]), int(stream["width"]), int(stream["height"])
 
 
 PIXEL_FORMAT = "yuva444p10le"

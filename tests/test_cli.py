@@ -8,11 +8,14 @@ from pathlib import Path
 import numpy as np
 import pytest
 import typer
+import yaml
 from typer.testing import CliRunner
 
 from pov_radar import cli, maps
-from pov_radar.cli import app
+from pov_radar.config import Config
+from pov_radar.cli import RenderRecord, app
 from pov_radar.drawing import read_png
+from pov_radar.placement import Placement
 from pov_radar.ride import Ride, Sample
 from pov_radar.roads import MapData
 
@@ -553,3 +556,142 @@ def test_render_refuses_chapters_that_differ_in_frame_rate(
     assert result.exit_code == 1
     assert "differ in frame rate or size" in result.output
     assert not (first.parent / "pov-radar" / "GX0001" / "overview.mov").exists()
+
+
+def sidecar(folder: Path) -> RenderRecord:
+    return RenderRecord.model_validate_json((folder / "render.json").read_text())
+
+
+def test_every_render_writes_the_placement_sidecar_and_the_attribution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, map_cache: Path
+) -> None:
+    source = rendering(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["render", str(source)], input="n\n")
+
+    assert result.exit_code == 0, result.output
+    folder = source.parent / "pov-radar" / "GX0001"
+    record = sidecar(folder)
+    assert (record.frame.width, record.frame.height, record.frame.rate) == (640, 360, "10")
+    minimap, overview = record.overlays["minimap"], record.overlays["overview"]
+    # The Minimap is 24% of 360 across, 3% of 360 from the edges beside the bottom-right corner.
+    assert (minimap.file, minimap.full_frame) == ("minimap.mov", False)
+    assert minimap.placement == Placement(corner="bottom-right", margin=11, x=640 - 11 - 86, y=360 - 11 - 86, width=86, height=86)
+    # The Overview is 28% of 360 high, its width following the Route's shape, in the top-left corner.
+    assert overview.file == "overview.mov"
+    assert (overview.placement.corner, overview.placement.x, overview.placement.y) == ("top-left", 11, 11)
+    assert overview.placement.height == 101 and 0.7 * 101 <= overview.placement.width <= 1.8 * 101
+    assert record.time_offset == 0.0
+    assert record.version == "0.1.0"
+    assert record.map is None, "the rider declined the download"
+    assert record.config == Config().dumped()
+    assert "OpenStreetMap contributors" in (folder / "ATTRIBUTION.txt").read_text()
+    assert f"Wrote {folder / 'ATTRIBUTION.txt'}" in result.output
+    assert f"Wrote {folder / 'render.json'}" in result.output
+    assert "/" not in record.model_dump_json(include={"overlays"}), "files named, not paths that might say whose machine it is"
+
+
+def test_render_logs_the_effective_config_first_and_nothing_else_about_the_machine(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, map_cache: Path
+) -> None:
+    source = rendering(tmp_path, monkeypatch)
+    monkeypatch.setenv("POV_RADAR_SECRET_TOKEN", "hunter2")
+
+    result = runner.invoke(app, ["render", str(source), "--time-offset", "0.5"], input="n\n")
+
+    assert result.exit_code == 0, result.output
+    logged = result.output[: result.output.index("GX0001:")]
+    first, *settings = logged.strip().splitlines()
+    assert first == "Config: built-in defaults, options"
+    expected = Config.model_validate({**Config().dumped(), "telemetry": {"time_offset": 0.5}})
+    assert yaml.safe_load("\n".join(settings)) == expected.dumped(), "the settings, and only the settings"
+    assert "hunter2" not in result.output and str(map_cache) not in logged
+
+
+def test_options_override_the_config_file_which_overrides_the_defaults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, map_cache: Path
+) -> None:
+    source = rendering(tmp_path, monkeypatch)
+    config = tmp_path / "ride.yaml"
+    config.write_text("telemetry:\n  time_offset: 0.5\n  max_gap: 0.75\nminimap:\n  corner: top-right\n")
+
+    result = runner.invoke(app, ["render", str(source), "--config", str(config), "--time-offset", "0.25"], input="n\n")
+
+    assert result.exit_code == 0, result.output
+    assert result.output.startswith(f"Config: built-in defaults, {config}, options\n")
+    record = sidecar(source.parent / "pov-radar" / "GX0001")
+    assert record.time_offset == 0.25
+    assert record.config["telemetry"]["max_gap"] == 0.75
+    assert record.overlays["minimap"].placement.corner == "top-right"
+
+
+def test_the_time_offset_moves_the_telemetry_later_and_says_so(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, map_cache: Path
+) -> None:
+    source = rendering(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["inspect", str(source), "--time-offset", "0.25"], input="n\n")
+
+    assert result.exit_code == 0, result.output
+    telemetry = json.loads((source.parent / "pov-radar" / "GX0001" / "telemetry.json").read_text())
+    assert [s["time"] for s in telemetry["samples"]] == [0.25, 1.25]
+    assert telemetry["time_offset"] == 0.25
+
+
+def test_full_frame_overlays_are_the_footage_size_with_the_map_in_place(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, map_cache: Path
+) -> None:
+    source = rendering(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["render", str(source), "--full-frame", "--no-overview"], input="n\n")
+
+    assert result.exit_code == 0, result.output
+    folder = source.parent / "pov-radar" / "GX0001"
+    frame = first_frame(folder / "minimap.mov")
+    assert frame.shape == (360, 640, 4)
+    minimap = sidecar(folder).overlays["minimap"]
+    assert minimap.full_frame
+    x, y = minimap.placement.x, minimap.placement.y
+    assert frame[: y - 1].max() == 0 and frame[:, : x - 1, 3].max() == 0, "transparent away from the map"
+    assert frame[y + 43, x + 43, 3] > 200, "the map at its place"
+
+
+def test_a_bad_config_stops_the_run_before_anything_is_written(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, map_cache: Path
+) -> None:
+    source = rendering(tmp_path, monkeypatch)
+    config = tmp_path / "bad.yaml"
+    config.write_text("minimap:\n  margin: -1\n")
+
+    result = runner.invoke(app, ["render", str(source), "--config", str(config)], input="n\n")
+
+    assert result.exit_code == 1
+    assert f"Error: {config}: minimap.margin" in result.output
+    assert_wrote_nothing(source)
+
+
+def test_an_overlay_too_big_for_the_footage_is_an_error_not_a_misplaced_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, map_cache: Path
+) -> None:
+    source = rendering(tmp_path, monkeypatch)
+    config = tmp_path / "big.yaml"
+    config.write_text("minimap:\n  margin: 0.4\n")
+
+    result = runner.invoke(app, ["render", str(source), "--config", str(config), "--no-overview"], input="n\n")
+
+    assert result.exit_code == 1
+    assert "Error: A 86×86 Overlay with a 144-pixel margin doesn't fit a 640×360 frame" in result.output
+    folder = source.parent / "pov-radar" / "GX0001"
+    assert not (folder / "minimap.mov").exists() and not (folder / "render.json").exists()
+
+
+def test_a_bad_option_is_refused_as_the_config_file_would_refuse_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, map_cache: Path
+) -> None:
+    source = rendering(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["render", str(source), "--heading-window", "0"], input="n\n")
+
+    assert result.exit_code == 1
+    assert "Error: options: heading.window: Input should be greater than 0" in result.output
+    assert_wrote_nothing(source)

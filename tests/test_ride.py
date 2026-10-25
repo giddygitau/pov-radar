@@ -701,3 +701,19 @@ def test_creeping_in_traffic_the_heading_never_snaps() -> None:
 
     assert all(abs(turned(90.0, heading)) < 30 for heading in creeping), "east, give or take the wander"
     assert all(abs(turned(a, b)) < 5 for a, b in zip(creeping, creeping[1:])), "a few degrees a frame at most"
+
+
+@pytest.mark.parametrize("offset", [0.5, -0.25, 1.0])
+def test_a_time_offset_moves_every_position_exactly_that_much_later_on_the_video_timeline(offset: float) -> None:
+    ride = riding_east([0, 3, 3, 3, 0, 3])
+
+    shifted = ride.shifted(offset)
+
+    for t in (1.0, 1.3, 2.75, 3.0, 5.0):
+        later, original = shifted.at(t + offset), ride.at(t)
+        assert later.metres == pytest.approx(original.metres)
+        assert later.visibility == original.visibility
+        assert later.passed == original.passed
+    assert shifted.duration == ride.duration, "the footage is as long as it was"
+    assert [(i.start, i.end) for i in shifted.issues] == [(i.start + offset, i.end + offset) for i in ride.issues]
+    assert [s.time for s in ride.samples] == [0, 1, 2, 3, 4, 5], "the original Ride is untouched"

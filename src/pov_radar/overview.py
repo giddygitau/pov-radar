@@ -6,13 +6,17 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
-from pov_radar.drawing import draw_dot, draw_route, path, pixels, skia, skia_colour, stroke
+from pov_radar.drawing import draw_dot, draw_route, fill, path, pixels, skia, skia_colour, stroke
 from pov_radar.ride import FrameState, Ride
+from pov_radar.maps import CREDIT
 from pov_radar.roads import RoadNetwork
 from pov_radar.style import Style
 
 MIN_EXTENT = 100.0
 """Metres the Overview shows at least, so a Ride that barely moves isn't magnified to nothing."""
+
+CAP_HEIGHT = 0.74
+"""Height of a typeface's capitals as a fraction of its size, near enough for Helvetica and its like."""
 
 ROUTE_DETAIL = 0.5
 """Pixels apart the points of the Route's line are kept, at least. A long Ride has hundreds of Samples to a pixel;
@@ -20,11 +24,13 @@ drawing every one makes each frame slow and shows nothing more."""
 
 
 class Overview:
-    """The Overview's fixed framing for a Ride: fitted to its valid Samples, so rejected ones never move it."""
+    """The Overview's fixed framing for a Ride: fitted to its valid Samples, so rejected ones never move it; with the
+    OpenStreetMap credit burnt in along its bottom edge if `credit`."""
 
-    def __init__(self, ride: Ride, frame_height: int, style: Style | None = None) -> None:
+    def __init__(self, ride: Ride, frame_height: int, style: Style | None = None, credit: bool = False) -> None:
         self.style = style or Style()
         self.frame_height = frame_height
+        self.credit = credit
         valid = ride.valid_samples
         self._route = ride.projection.to_metres([s.longitude for s in valid], [s.latitude for s in valid])
 
@@ -78,7 +84,7 @@ class Overview:
         return draw
 
     def _draw_ground(self, canvas: Any, roads: RoadNetwork) -> None:
-        """The surface, roads and outline, on a cleared canvas."""
+        """The surface, roads, outline and any credit, on a cleared canvas."""
         s, h = self.style, self.frame_height
         canvas.clear(skia.ColorTRANSPARENT)
         canvas.save()
@@ -92,6 +98,15 @@ class Overview:
             canvas.drawPath(path(lines), stroke(road_style.colour, width))
         canvas.restore()
         canvas.drawPath(self._shape, stroke(s.ring, s.ring_width * h))
+        if self.credit:
+            gap = s.overview_credit_size * h
+            inset = max(gap, s.overview_corner * self.height / 2)  # Clear of the rounded corner.
+            font = skia.Font(skia.Typeface(s.overview_credit_typeface), gap / CAP_HEIGHT)
+            room = self.width - 2 * inset
+            if font.measureText(CREDIT) > room:
+                font.setSize(font.getSize() * room / font.measureText(CREDIT))
+            x = self.width - inset - font.measureText(CREDIT)
+            canvas.drawString(CREDIT, x, self.height - gap, font, fill(s.overview_credit))
 
     def _draw_route(self, canvas: Any, completed: NDArray[np.float64], upcoming: NDArray[np.float64]) -> None:
         """The Completed route muted, beneath the Upcoming route in the accent colour with its glow; in pixels."""
