@@ -4,7 +4,7 @@ from typing import Literal
 
 import pytest
 
-from pov_radar.ride import KMH_PER_MS, Ride, TelemetryError, join, parse_ride
+from pov_radar.ride import KMH_PER_MS, FrameState, Ride, TelemetryError, join, parse_ride
 
 GPS_COLUMNS = ["GPSLatitude", "GPSLongitude", "GPSAltitude", "GPSSpeed"]
 
@@ -401,7 +401,76 @@ def test_the_current_position_does_not_depend_on_query_order() -> None:
     ride = riding_east([3] * 6)
     times = [0.1 * k for k in range(60)]
 
-    forwards = [ride.at(t) for t in times]
-    shuffled = {t: ride.at(t) for t in sorted(times, key=lambda t: (t * 7.3) % 1)}
+    forwards = [described(ride.at(t)) for t in times]
+    shuffled = {t: described(ride.at(t)) for t in sorted(times, key=lambda t: (t * 7.3) % 1)}
 
     assert [shuffled[t] for t in times] == forwards
+
+
+def described(state: FrameState) -> tuple[object, ...]:
+    """Everything a frame state says, comparable with `==`."""
+    return (
+        state.time, state.latitude, state.longitude, state.metres, state.completed.tolist(), state.upcoming.tolist()
+    )
+
+
+def riding(steps: list[tuple[int, int]]) -> Ride:
+    """A Sample a second at each (east, north), in steps of 0.0001° (~11 m) from ROW."""
+    payloads = [
+        Payload(sample_time=float(t), gps=[(ROW[0] + north * 0.0001, ROW[1] + east * 0.0001, ROW[2], 40.0)])
+        for t, (east, north) in enumerate(steps)
+    ]
+    return parse_ride(exiftool_text(*payloads), duration=float(len(steps)))
+
+
+def assert_split_at_the_current_position(state: FrameState) -> None:
+    assert tuple(state.completed[-1]) == tuple(state.upcoming[0]) == state.metres
+
+
+def test_the_split_point_lies_between_samples_when_the_time_does() -> None:
+    ride = riding_east([3, 3, 3])
+
+    state = ride.at(0.25)
+
+    assert_split_at_the_current_position(state)
+    assert len(state.completed) == 2, "the first Sample, then the Split point"
+    assert len(state.upcoming) == 3, "the Split point, then the second and third Samples"
+    assert state.completed[1][0] - state.completed[0][0] == pytest.approx(EAST_STEP / 4, rel=0.01)
+    assert state.upcoming[1][0] - state.upcoming[0][0] == pytest.approx(EAST_STEP * 3 / 4, rel=0.01)
+
+
+@pytest.mark.parametrize("t", [-1.0, 0.0, 0.5, 2.0, 3.99, 4.0, 10.0])
+def test_completed_and_upcoming_make_up_the_whole_route_without_gap_or_overlap(t: float) -> None:
+    ride = riding_east([3, 3, 0, 3, 3, 3])
+    # The valid Samples' positions, at their own times.
+    route = [ride.at(float(time)).metres for time in (0, 1, 3, 4, 5)]
+
+    state = ride.at(t)
+
+    assert_split_at_the_current_position(state)
+    joined = [tuple(point) for point in [*state.completed[:-1], *state.upcoming[1:]]]
+    assert joined == pytest.approx(route)
+
+
+def test_an_out_and_back_route_splits_by_time_not_by_place() -> None:
+    # East 4 steps and back, a Sample a second: 1.5 steps east is passed at 1.5 s and again at 6.5 s.
+    ride = riding([(0, 0), (1, 0), (2, 0), (3, 0), (4, 0), (3, 0), (2, 0), (1, 0), (0, 0)])
+    out, back = ride.at(1.5), ride.at(6.5)
+
+    assert back.metres == pytest.approx(out.metres)
+    assert (len(out.completed), len(out.upcoming)) == (3, 8), "on the way out, the way back is all Upcoming"
+    assert (len(back.completed), len(back.upcoming)) == (8, 3), "on the way back, the way out is all Completed"
+    assert back.upcoming[-1][0] < back.upcoming[0][0], "what's left heads west, home"
+
+
+def test_a_self_crossing_route_splits_by_time_at_the_crossing() -> None:
+    # East along the bottom, up, back west, and south through (2, 0) again at 10 s, which it first crossed at 2 s.
+    ride = riding(
+        [(0, 0), (1, 0), (2, 0), (3, 0), (4, 0), (4, 1), (4, 2), (3, 2), (2, 2), (2, 1), (2, 0), (2, -1), (2, -2)]
+    )
+    first, second = ride.at(2.0), ride.at(10.0)
+
+    assert second.metres == pytest.approx(first.metres)
+    assert len(first.completed) - 1 == 3, "Samples at 0, 1 and 2 s are Completed"
+    assert len(second.completed) - 1 == 11, "the first pass through the crossing stays Completed"
+    assert len(second.upcoming) - 1 == 2, "only the leg south of the crossing is Upcoming"

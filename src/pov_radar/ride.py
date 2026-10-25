@@ -4,6 +4,7 @@ import math
 import re
 from bisect import bisect_left
 from collections import defaultdict
+from dataclasses import dataclass
 from functools import cached_property
 from itertools import groupby
 from typing import Literal
@@ -67,7 +68,8 @@ class MultiLineString(BaseModel):
     """Lines of (longitude, latitude) positions."""
 
 
-class FrameState(BaseModel):
+@dataclass(frozen=True)
+class FrameState:
     """The Ride at one instant on the Video timeline."""
 
     time: float
@@ -77,6 +79,20 @@ class FrameState(BaseModel):
     """The Current position."""
     metres: tuple[float, float]
     """The Current position in the Ride's projection: metres east and north of its centre."""
+    passed: int
+    """How many of the Ride's valid Samples are at or before `time`, and so on the Completed route."""
+    route: NDArray[np.float64]
+    """The whole Route, (N, 2) projected metres of the valid Samples in time order; shared, never copied."""
+
+    @property
+    def completed(self) -> NDArray[np.float64]:
+        """The Completed route: the valid Samples passed, then the Split point."""
+        return np.vstack([self.route[: self.passed], [self.metres]])
+
+    @property
+    def upcoming(self) -> NDArray[np.float64]:
+        """The Upcoming route: the Split point, then the valid Samples still to come."""
+        return np.vstack([[self.metres], self.route[self.passed :]])
 
 
 MAX_GAP = 0.5
@@ -131,7 +147,11 @@ class Ride(BaseModel):
             raise ValueError("A Ride with no valid Samples has no Current position")
         x, y = (float(np.interp(t, times, column)) for column in (metres[:, 0], metres[:, 1]))
         longitude, latitude = self.projection.to_degrees(x, y)
-        return FrameState(time=t, latitude=latitude, longitude=longitude, metres=(x, y))
+        # The Split point follows every Sample at or before `t`, so the Route is split by time, not by place.
+        passed = int(np.searchsorted(times, t, side="right"))
+        return FrameState(
+            time=t, latitude=latitude, longitude=longitude, metres=(x, y), passed=passed, route=metres
+        )
 
     @cached_property
     def _timeline(self) -> tuple[NDArray[np.float64], NDArray[np.float64]]:

@@ -18,6 +18,10 @@ skia: Any = import_module("skia")
 MIN_EXTENT = 100.0
 """Metres the Overview shows at least, so a Ride that barely moves isn't magnified to nothing."""
 
+ROUTE_DETAIL = 0.5
+"""Pixels apart the points of the Route's line are kept, at least. A long Ride has hundreds of Samples to a pixel;
+drawing every one makes each frame slow and shows nothing more."""
+
 
 class Overview:
     """The Overview's fixed framing for a Ride: fitted to its valid Samples, so rejected ones never move it."""
@@ -39,19 +43,26 @@ class Overview:
         self._centre = np.array([(west + east) / 2, (south + north) / 2])
         self.reach = max(self.width / self._scale - (east - west), self.height / self._scale - (north - south)) / 2
         """Metres the Overview shows beyond the box around the Route, where it needs roads."""
+        self._drawn, self._kept = _simplified_line(self._pixels(self._route), ROUTE_DETAIL)
+        """The Route's line in pixels, and the index among the valid Samples of each of its points."""
+        corner = self.style.overview_corner * self.height
+        self._shape = skia.Path().addRRect(skia.RRect.MakeRectXY(skia.Rect(self.width, self.height), corner, corner))
+        """The rounded rectangle the Overview is drawn in."""
 
     def render(self, roads: RoadNetwork) -> NDArray[np.uint8]:
         """The Overview as (height, width, 4) RGBA with straight alpha, the whole Route Upcoming."""
         surface = skia.Surface(self.width, self.height)
-        self._draw_map(surface.getCanvas(), roads)
+        canvas = surface.getCanvas()
+        self._draw_ground(canvas, roads)
+        self._draw_route(canvas, self._drawn[:0], self._drawn)
         return _pixels(surface)
 
     def frames(self, roads: RoadNetwork) -> Callable[[FrameState], NDArray[np.uint8]]:
-        """A function drawing the Overview at a frame state, with a dot at its Current position; the map beneath
-        is drawn once, here."""
+        """A function drawing the Overview at a frame state: the Route Completed up to the Split point and Upcoming
+        after it, with a dot there above every line. The roads beneath are drawn once, here."""
         surface = skia.Surface(self.width, self.height)
-        self._draw_map(surface.getCanvas(), roads)
-        background = surface.makeImageSnapshot()
+        self._draw_ground(surface.getCanvas(), roads)
+        ground = surface.makeImageSnapshot()
         s, h = self.style, self.frame_height
         halo = skia.Paint(Color=_colour(s.marker_halo), AntiAlias=True)
         dot = skia.Paint(Color=_colour(s.marker), AntiAlias=True)
@@ -59,22 +70,23 @@ class Overview:
         def draw(state: FrameState) -> NDArray[np.uint8]:
             canvas = surface.getCanvas()
             canvas.clear(skia.ColorTRANSPARENT)
-            canvas.drawImage(background, 0, 0)
-            ((x, y),) = self._pixels(np.array([state.metres]))
+            canvas.drawImage(ground, 0, 0)
+            split = int(np.searchsorted(self._kept, state.passed))
+            here = self._pixels(np.array([state.metres]))
+            self._draw_route(canvas, np.vstack([self._drawn[:split], here]), np.vstack([here, self._drawn[split:]]))
+            ((x, y),) = here
             canvas.drawCircle(x, y, s.overview_dot_halo * h, halo)
             canvas.drawCircle(x, y, s.overview_dot * h, dot)
             return _pixels(surface)
 
         return draw
 
-    def _draw_map(self, canvas: Any, roads: RoadNetwork) -> None:
-        """The surface, roads, whole Route and outline, on a cleared canvas."""
+    def _draw_ground(self, canvas: Any, roads: RoadNetwork) -> None:
+        """The surface, roads and outline, on a cleared canvas."""
         s, h = self.style, self.frame_height
         canvas.clear(skia.ColorTRANSPARENT)
-        corner = s.overview_corner * self.height
-        shape = skia.Path().addRRect(skia.RRect.MakeRectXY(skia.Rect(self.width, self.height), corner, corner))
         canvas.save()
-        canvas.clipPath(shape, doAntiAlias=True)
+        canvas.clipPath(self._shape, doAntiAlias=True)
         canvas.drawColor(_colour(s.surface))
         for road_class, road_style in s.roads.items():
             width = road_style.width * s.overview_line_scale * h
@@ -82,14 +94,21 @@ class Overview:
             if road_class == "minor":
                 lines = self._thinned(lines, width)
             canvas.drawPath(_path(lines), _stroke(road_style.colour, width))
+        canvas.restore()
+        canvas.drawPath(self._shape, _stroke(s.ring, s.ring_width * h))
 
-        route = _path([self._pixels(self._route)])
+    def _draw_route(self, canvas: Any, completed: NDArray[np.float64], upcoming: NDArray[np.float64]) -> None:
+        """The Completed route muted, beneath the Upcoming route in the accent colour with its glow; in pixels."""
+        s, h = self.style, self.frame_height
         width = s.route_width * s.overview_line_scale * s.overview_route_scale * h
         glow = (*s.upcoming[:3], s.upcoming_glow_alpha)
-        canvas.drawPath(route, _stroke(glow, width * s.upcoming_glow_scale, blur=s.overview_glow_blur * h))
-        canvas.drawPath(route, _stroke(s.upcoming, width))
+        ahead = _path([upcoming])
+        canvas.save()
+        canvas.clipPath(self._shape, doAntiAlias=True)
+        canvas.drawPath(_path([completed]), _stroke(s.completed, width))
+        canvas.drawPath(ahead, _stroke(glow, width * s.upcoming_glow_scale, blur=s.overview_glow_blur * h))
+        canvas.drawPath(ahead, _stroke(s.upcoming, width))
         canvas.restore()
-        canvas.drawPath(shape, _stroke(s.ring, s.ring_width * h))
 
     def _thinned(self, lines: list[NDArray[np.float64]], width: float) -> list[NDArray[np.float64]]:
         """The longest of `lines`, in pixels `width` wide, kept until each patch of the Overview is as covered as
@@ -141,6 +160,21 @@ def read_png(path: Path) -> NDArray[np.uint8]:
 def _pixels(surface: Any) -> NDArray[np.uint8]:
     """A surface's contents as (height, width, 4) straight-alpha RGBA."""
     return surface.toarray(colorType=skia.kRGBA_8888_ColorType, alphaType=skia.kUnpremul_AlphaType)
+
+
+def _simplified_line(points: NDArray[np.float64], detail: float) -> tuple[NDArray[np.float64], NDArray[np.int64]]:
+    """The points of a line, keeping its ends and each point at least `detail` from the last one kept; and the
+    indices of those kept."""
+    kept = [0]
+    last_x, last_y = points[0]
+    for i, (x, y) in enumerate(points[1:-1].tolist(), 1):
+        if (x - last_x) ** 2 + (y - last_y) ** 2 >= detail**2:
+            kept.append(i)
+            last_x, last_y = x, y
+    if len(points) > 1:
+        kept.append(len(points) - 1)
+    indices = np.array(kept, dtype=np.int64)
+    return points[indices], indices
 
 
 def _path(lines: list[NDArray[np.float64]]) -> Any:

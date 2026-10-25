@@ -178,3 +178,53 @@ def test_a_white_dot_marks_the_current_position(
     assert row == pytest.approx(_square_pixels(image.shape[0], south, south).start, abs=2)
     assert column == pytest.approx(_square_pixels(image.shape[1], east, east).start, abs=2)
     assert_matches_golden(image, name, request)
+
+
+# East along the bottom, up the east side, back west along the top, then south through the bottom leg at (1, 0.5) km,
+# which it first passed at 50 s and passes again at 300 s; Samples 5 s apart, 330 s in all.
+CROSSING = ride(
+    along((0, 0.5), (2, 0.5), 20)
+    + along((2, 0.5), (2, 2), 15)[1:]
+    + along((2, 2), (1, 2), 10)[1:]
+    + along((1, 2), (1, 0), 20)[1:]
+)
+
+
+def is_upcoming(pixel: NDArray[np.uint8]) -> bool:
+    red, green, _, _ = (int(c) for c in pixel)
+    return green > 200 and red < 60
+
+
+def is_completed(pixel: NDArray[np.uint8]) -> bool:
+    red, green, blue, _ = (int(c) for c in pixel)
+    return red > 90 and abs(red - blue) < 30 and abs(red - green) < 30
+
+
+def colours_at(image: NDArray[np.uint8], east_km: float, north_km: float) -> tuple[bool, bool]:
+    """Whether the Upcoming and Completed routes' colours show within 2 pixels of a point on the square framing."""
+    row = _square_pixels(image.shape[0], 2 - north_km, 2 - north_km).start
+    column = _square_pixels(image.shape[1], east_km, east_km).start
+    patch = image[row - 2 : row + 3, column - 2 : column + 3].reshape(-1, 4)
+    return any(is_upcoming(p) for p in patch), any(is_completed(p) for p in patch)
+
+
+UPCOMING, COMPLETED = (True, False), (False, True)
+
+
+@pytest.mark.parametrize(
+    ("name", "time", "expected"),
+    [
+        ("split-start", 0.0, {(0.5, 0.5): UPCOMING, (2.0, 1.2): UPCOMING, (1.0, 0.2): UPCOMING}),
+        ("split-crossing", 300.0, {(0.5, 0.5): COMPLETED, (2.0, 1.2): COMPLETED, (1.0, 0.2): UPCOMING}),
+        ("split-end", 330.0, {(0.5, 0.5): COMPLETED, (2.0, 1.2): COMPLETED, (1.0, 0.2): COMPLETED}),
+    ],
+)
+def test_the_route_is_completed_up_to_the_dot_and_upcoming_after_it_by_time(
+    name: str, time: float, expected: dict[tuple[float, float], tuple[bool, bool]], request: pytest.FixtureRequest
+) -> None:
+    draw = Overview(CROSSING, FRAME_HEIGHT).frames(RoadNetwork([]))
+
+    image = draw(CROSSING.at(time))
+
+    assert {point: colours_at(image, *point) for point in expected} == expected
+    assert_matches_golden(image, name, request)

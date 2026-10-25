@@ -39,6 +39,8 @@ class Style:
     """Drawn in this order, faintest first."""
     upcoming: Colour = (0x00, 0xE5, 0xFF, 255)
     """The accent colour of the Upcoming route."""
+    completed: Colour = (128, 128, 128, 255)
+    """The muted grey of the Completed route."""
     upcoming_glow_alpha: int = 110
     """Opacity, 0–255, of the soft glow in the accent colour beneath the Upcoming route."""
     upcoming_glow_scale: float = 2.2
