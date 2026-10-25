@@ -91,6 +91,7 @@ def test_an_empty_file_is_the_defaults(tmp_path: Path) -> None:
         ("telemetry:\n  max_gapp: 1.0\n", "telemetry.max_gapp"),
         ("attribution: sometimes\n", "attribution"),
         ("composite:\n  crf: 52\n", "composite.crf"),
+        ("composite:\n  threads: 0\n", "composite.threads"),
         ("- just\n- a list\n", "a mapping"),
         ("minimap: [unclosed\n", "not valid YAML"),
     ],

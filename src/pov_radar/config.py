@@ -86,6 +86,9 @@ class CompositeConfig(_Section):
     """The encoder's constant quality: lower is better, and bigger."""
     pixel_format: str = "yuv420p10le"
     """10-bit, so the Overlays' gradients don't band."""
+    threads: int | None = Field(default=None, ge=1)
+    """How many threads decode, draw and encode the Composite, to leave the machine some room; None for every
+    core."""
 
     def encoding(self) -> Encoding:
         """As the encoder takes it."""

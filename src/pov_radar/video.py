@@ -166,9 +166,21 @@ class Encoding:
     """The encoder's constant quality: lower is better, and bigger."""
     pixel_format: str
     """e.g. `yuv420p10le`, 10-bit."""
+    threads: int | None = None
+    """How many threads ffmpeg decodes, filters and encodes on; None for every core."""
 
     def __str__(self) -> str:
-        return f"{self.encoder} -preset {self.preset} -crf {self.crf:g}, {self.pixel_format}"
+        on = f", on {self.threads} threads" if self.threads else ""
+        return f"{self.encoder} -preset {self.preset} -crf {self.crf:g}, {self.pixel_format}{on}"
+
+    def thread_options(self) -> tuple[list[str], list[str]]:
+        """The options limiting ffmpeg to `threads`: those for each input's decoder, and the rest. libx265 ignores
+        `-threads`, so it is limited to a thread pool that size."""
+        if self.threads is None:
+            return [], []
+        threads = str(self.threads)
+        encoder = ["-x265-params", f"pools={threads}"] if self.encoder == "libx265" else ["-threads", threads]
+        return ["-threads", threads], ["-filter_complex_threads", threads, *encoder]
 
 
 @dataclass(frozen=True)
@@ -205,6 +217,7 @@ def composite(chapters: list[Path], overlays: list[PlacedOverlay], path: Path, e
         last = f"v{i}"
     tags = ":".join(f"{_COLOUR_TAGS[name]}={value}" for name, value in _colour_tags(chapters[0]).items())
     graph.append(f"[{last}]setparams={tags}[out]" if tags else f"[{last}]null[out]")
+    decoding, threads = encoding.thread_options()
     with tempfile.TemporaryDirectory() as temp, tempfile.TemporaryFile() as errors:
         joined = Path(temp) / "chapters.txt"
         joined.write_text("".join(f"file '{_quoted(chapter.absolute())}'\n" for chapter in chapters))
@@ -212,8 +225,9 @@ def composite(chapters: list[Path], overlays: list[PlacedOverlay], path: Path, e
             [
                 _require("ffmpeg"),
                 *("-v", "error", "-y", "-nostdin", "-progress", "pipe:1", "-nostats"),
-                *("-f", "concat", "-safe", "0", "-i", str(joined)),
-                *(arg for overlay in overlays for arg in ("-i", str(overlay.path))),
+                *decoding, *("-f", "concat", "-safe", "0", "-i", str(joined)),
+                *(arg for overlay in overlays for arg in (*decoding, "-i", str(overlay.path))),
+                *threads,
                 *("-filter_complex", ";".join(graph), "-map", "[out]", "-map", "0:a?", "-c:a", "copy"),
                 *("-c:v", encoding.encoder, "-preset", encoding.preset, "-crf", f"{encoding.crf:g}"),
                 *("-pix_fmt", encoding.pixel_format),

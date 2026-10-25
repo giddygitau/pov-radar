@@ -837,3 +837,17 @@ def test_fast_without_the_composite_is_an_error(tmp_path: Path, monkeypatch: pyt
     assert result.exit_code == 1
     assert "--fast only speeds up --composite" in result.output
     assert_wrote_nothing(source)
+
+
+def test_the_composite_encodes_on_as_many_threads_as_configured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, map_cache: Path
+) -> None:
+    (source,) = gopro_rendering(tmp_path, monkeypatch)
+    config = tmp_path / "ride.yaml"
+    config.write_text("composite:\n  threads: 2\n")
+
+    result = runner.invoke(app, ["render", str(source), "--config", str(config), "--composite", "--fast"], input="n\n")
+
+    assert result.exit_code == 0, result.output
+    assert "Encoding final.mp4: libx265 -preset medium -crf 16, yuv420p10le, on 2 threads" in result.output
+    assert "numa-pools=2" in x265_options(source.parent / "pov-radar" / "GX0001" / "final.mp4").split()
