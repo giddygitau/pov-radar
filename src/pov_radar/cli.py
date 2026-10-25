@@ -22,10 +22,16 @@ from pov_radar.overview import Overview
 from pov_radar.placement import Placement, PlacementError, in_frame, place
 from pov_radar.maps import ATTRIBUTION
 from pov_radar.roads import MapData, RoadClass, RoadNetwork
-from pov_radar.video import OverlayWriter, VideoError, read_frames
+from pov_radar.video import OverlayWriter, PlacedOverlay, VideoError, composite, read_frames
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
 
+
+COMPOSITE = "final.mp4"
+"""The Composite's file name."""
+
+FAST_PRESET = "medium"
+"""The Composite's encoder preset with `--fast`."""
 
 PREVIEW_FRAME_HEIGHT = 2160
 """The preview is drawn as the Overview would be on 4K footage."""
@@ -50,6 +56,11 @@ class OverlayRecord(BaseModel):
     """Whether the file is the footage's size with the map in place, or cropped to the map."""
     placement: Placement
     """Where the map goes on the footage."""
+
+    @property
+    def origin(self) -> tuple[int, int]:
+        """Where the file's top-left pixel goes on the footage."""
+        return (0, 0) if self.full_frame else (self.placement.x, self.placement.y)
 
 
 class FrameRecord(BaseModel):
@@ -202,12 +213,22 @@ def render(
     attribution: Attribution = None,
     overview: Annotated[bool, typer.Option(help="Render overview.mov")] = True,
     minimap: Annotated[bool, typer.Option(help="Render minimap.mov")] = True,
+    with_composite: Annotated[
+        bool, typer.Option("--composite", help=f"Also write {COMPOSITE}: the footage with the Overlays burned in")
+    ] = False,
+    fast: Annotated[
+        bool, typer.Option("--fast", help=f"Encode {COMPOSITE} with the `{FAST_PRESET}` preset, for a quicker preview")
+    ] = False,
 ) -> None:
     """Inspect each Ride, as `inspect` does, then render its Overlays, overview.mov and minimap.mov, as transparent
-    videos, with render.json saying where they go on the footage and ATTRIBUTION.txt crediting the map data."""
+    videos, with render.json saying where they go on the footage and ATTRIBUTION.txt crediting the map data; and,
+    with `--composite`, final.mp4."""
     chosen = [name for name, wanted in (("overview", overview), ("minimap", minimap)) if wanted]
     if not chosen:
         typer.echo("Error: --no-overview and --no-minimap leave nothing to render", err=True)
+        raise typer.Exit(1)
+    if fast and not with_composite:
+        typer.echo("Error: --fast only speeds up --composite", err=True)
         raise typer.Exit(1)
     options = {
         "telemetry": {
@@ -219,13 +240,15 @@ def render(
         "heading": {"window": heading_window, "min_speed": heading_min_speed},
         "full_frame": full_frame,
         "attribution": attribution,
+        "composite": {"preset": FAST_PRESET if fast else None},
     }
     settings = _config(config, options, log=True)
     _each_ride(
         sources,
         out,
         settings,
-        lambda recording, folder, inspected: _render(recording, folder, inspected, chosen, settings),
+        lambda recording, folder, inspected: _render(recording, folder, inspected, chosen, settings)
+        and (not with_composite or _composite(recording, folder, settings)),
     )
 
 
@@ -386,6 +409,25 @@ def _render(recording: Recording, out: Path, inspected: Inspected, overlays: lis
     attribution = out / "ATTRIBUTION.txt"
     attribution.write_text(ATTRIBUTION)
     typer.echo(f"Wrote {attribution}; credit OpenStreetMap wherever the Overlays are shown")
+    return True
+
+
+def _composite(recording: Recording, out: Path, config: Config) -> bool:
+    """Burn the Overlays render.json records onto the Ride's footage, each in its place, as the Composite; False if
+    it couldn't be."""
+    record = RenderRecord.model_validate_json((out / "render.json").read_text())
+    overlays = [PlacedOverlay(out / overlay.file, *overlay.origin) for overlay in record.overlays.values()]
+    path, encoding = out / COMPOSITE, config.composite.encoding()
+    typer.echo(f"Encoding {path.name}: {encoding}")
+    try:
+        frames = read_frames(recording.chapters)
+        with typer.progressbar(length=frames.count, label=f"Encoding {path.name}", show_percent=True) as bar:
+            for done in composite(recording.chapters, overlays, path, encoding):
+                bar.update(done - bar.pos)
+    except VideoError as error:
+        typer.echo(f"Error: {error}", err=True)
+        return False
+    typer.echo(f"Wrote {path}")
     return True
 
 

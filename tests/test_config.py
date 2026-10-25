@@ -21,6 +21,7 @@ def test_with_no_file_and_no_options_the_built_in_defaults_apply(tmp_path: Path,
     assert config.minimap.margin == config.overview.margin == 0.03
     assert config.style.upcoming == (0x00, 0xE5, 0xFF, 255)
     assert config.attribution == "file" and not config.full_frame
+    assert str(config.composite.encoding()) == "libx265 -preset slow -crf 16, yuv420p10le"
 
 
 def test_the_file_overrides_the_defaults_and_options_override_the_file(tmp_path: Path) -> None:
@@ -89,6 +90,7 @@ def test_an_empty_file_is_the_defaults(tmp_path: Path) -> None:
         ("heading:\n  window: fast\n", "heading.window"),
         ("telemetry:\n  max_gapp: 1.0\n", "telemetry.max_gapp"),
         ("attribution: sometimes\n", "attribution"),
+        ("composite:\n  crf: 52\n", "composite.crf"),
         ("- just\n- a list\n", "a mapping"),
         ("minimap: [unclosed\n", "not valid YAML"),
     ],

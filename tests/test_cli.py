@@ -1,3 +1,4 @@
+import hashlib
 import json
 import re
 import shutil
@@ -694,4 +695,145 @@ def test_a_bad_option_is_refused_as_the_config_file_would_refuse_it(
 
     assert result.exit_code == 1
     assert "Error: options: heading.window: Input should be greater than 0" in result.output
+    assert_wrote_nothing(source)
+
+
+def gopro_footage(tmp_path: Path, *chapters: str) -> list[Path]:
+    """Real 1 s, 10 fps, 640×360 Chapters encoded as the camera encodes them: HEVC, 8-bit full range, BT.709, with
+    AAC audio; each Chapter's Ride a Sample at each end ~1.1 km apart."""
+    folder = tmp_path / "footage"
+    folder.mkdir()
+    paths = [folder / name for name in chapters or ("GX010001.MP4",)]
+    for path in paths:
+        subprocess.run(
+            [
+                "ffmpeg", "-v", "error",
+                *("-f", "lavfi", "-i", "testsrc2=duration=1:size=640x360:rate=10"),
+                *("-f", "lavfi", "-i", "sine=duration=1"),
+                *("-vf", "setparams=range=pc:colorspace=bt709:color_trc=bt709:color_primaries=bt709"),
+                *("-c:v", "libx265", "-x265-params", "log-level=none", "-pix_fmt", "yuvj420p"),
+                # As the camera does, with no edit list to skip the audio's priming, which joining would lose.
+                *("-c:a", "aac", "-use_editlist", "0", "-tag:v", "hvc1", str(path)),
+            ],
+            check=True,
+        )
+    return paths
+
+
+def probe_streams(path: Path) -> tuple[dict[str, str], list[dict[str, str]], float]:
+    """The video stream's codec, pixel format and colour tags, the other streams' codecs, and the file's duration."""
+    result = subprocess.run(
+        [
+            "ffprobe", "-v", "error",
+            "-show_entries", "stream=codec_type,codec_name,pix_fmt,color_range,color_space,color_transfer,color_primaries",
+            "-show_entries", "format=duration", "-of", "json", str(path),
+        ],
+        capture_output=True, text=True, check=True,
+    )
+    probed = json.loads(result.stdout)
+    streams: list[dict[str, str]] = probed["streams"]
+    (video,) = [s for s in streams if s["codec_type"] == "video"]
+    return video, [s for s in streams if s["codec_type"] != "video"], float(probed["format"]["duration"])
+
+
+def gopro_rendering(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *chapters: str) -> list[Path]:
+    """Camera-encoded Chapters, as `gopro_footage` makes them, each with the Ride `rendering` gives its footage."""
+    paths = gopro_footage(tmp_path, *chapters)
+    ride = chapter_ride(1.0, -0.7, -0.7)
+    ride.samples[1].longitude = 36.91
+
+    def read_ride(path: Path) -> Ride:
+        return ride
+
+    monkeypatch.setattr(cli, "read_ride", read_ride)
+    return paths
+
+
+def test_the_composite_is_10_bit_hevc_tagged_as_the_source_with_its_audio_and_duration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, map_cache: Path
+) -> None:
+    (source,) = gopro_rendering(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["render", str(source), "--composite", "--fast"], input="n\n")
+
+    assert result.exit_code == 0, result.output
+    final = source.parent / "pov-radar" / "GX0001" / "final.mp4"
+    assert f"Wrote {final}" in result.output
+    video, others, duration = probe_streams(final)
+    assert (video["codec_name"], video["pix_fmt"]) == ("hevc", "yuv420p10le")
+    assert video["color_range"] == "pc", "full range, as the source"
+    assert video["color_space"] == video["color_transfer"] == video["color_primaries"] == "bt709"
+    assert [s["codec_name"] for s in others] == ["aac"], "the audio, and nothing else"
+    assert duration == pytest.approx(probe_streams(source)[2], abs=0.001)
+
+
+@pytest.mark.parametrize("layout", ["--cropped", "--full-frame"])
+def test_the_composite_burns_each_overlay_in_its_place_and_leaves_the_footage_as_it_was(
+    layout: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, map_cache: Path
+) -> None:
+    (source,) = gopro_rendering(tmp_path, monkeypatch)
+    checksum = hashlib.sha256(source.read_bytes()).hexdigest()
+
+    result = runner.invoke(app, ["render", str(source), "--composite", "--fast", layout], input="n\n")
+
+    assert result.exit_code == 0, result.output
+    folder = source.parent / "pov-radar" / "GX0001"
+    final, original = first_frame(folder / "final.mp4"), first_frame(source)
+    # Between the Overview, top-left, and the Minimap, bottom-right.
+    away = np.s_[150:210, 250:390, :3]
+    assert np.abs(final[away].astype(int) - original[away]).mean() < 1.5, "no brightness or contrast shift"
+    for name, overlay in sidecar(folder).overlays.items():
+        p = overlay.placement
+        drawn = first_frame(folder / overlay.file)
+        x, y = p.x + p.width // 2, p.y + p.height // 2
+        centre = drawn[y, x] if overlay.full_frame else drawn[p.height // 2, p.width // 2]
+        alpha = centre[3] / 255
+        assert alpha > 0.5, f"the {name} shows at its centre"
+        expected = alpha * centre[:3] + (1 - alpha) * original[y, x, :3]
+        assert np.abs(final[y, x, :3] - expected).max() <= 6, f"the {name} is burned in at its place"
+    assert hashlib.sha256(source.read_bytes()).hexdigest() == checksum, "the source is never modified"
+
+
+def test_the_composite_joins_the_rides_chapters(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, map_cache: Path) -> None:
+    first, _ = gopro_rendering(tmp_path, monkeypatch, "GX010001.MP4", "GX020001.MP4")
+
+    result = runner.invoke(app, ["render", str(first), "--composite", "--fast"], input="n\n")
+
+    assert result.exit_code == 0, result.output
+    final = first.parent / "pov-radar" / "GX0001" / "final.mp4"
+    assert probe_video(final, count_frames=True)["frames"] == "20"
+    assert probe_streams(final)[2] == pytest.approx(2 * probe_streams(first)[2], abs=0.001)
+
+
+def x265_options(path: Path) -> str:
+    """The encoder settings x265 writes into the stream it encodes."""
+    found = re.search(rb"x265 \(build \d+\) - .*? - options: ([\x20-\x7e]*)", path.read_bytes())
+    assert found, f"{path.name} wasn't encoded by x265"
+    return found[1].decode()
+
+
+@pytest.mark.parametrize(("fast", "preset"), [([], "ultrafast"), (["--fast"], "medium")])
+def test_the_composite_is_encoded_as_configured_and_fast_makes_its_preset_medium(
+    fast: list[str], preset: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, map_cache: Path
+) -> None:
+    (source,) = gopro_rendering(tmp_path, monkeypatch)
+    config = tmp_path / "ride.yaml"
+    config.write_text("composite:\n  preset: ultrafast\n  crf: 22\n")
+
+    result = runner.invoke(app, ["render", str(source), "--config", str(config), "--composite", *fast], input="n\n")
+
+    assert result.exit_code == 0, result.output
+    folder = source.parent / "pov-radar" / "GX0001"
+    assert f"Encoding final.mp4: libx265 -preset {preset} -crf 22, yuv420p10le" in result.output
+    assert sidecar(folder).config["composite"]["preset"] == preset
+    assert "crf=22.0" in x265_options(folder / "final.mp4")
+
+
+def test_fast_without_the_composite_is_an_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, map_cache: Path) -> None:
+    source = rendering(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["render", str(source), "--fast"], input="n\n")
+
+    assert result.exit_code == 1
+    assert "--fast only speeds up --composite" in result.output
     assert_wrote_nothing(source)

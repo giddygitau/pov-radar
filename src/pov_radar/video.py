@@ -1,9 +1,10 @@
-"""Read a Chapter's frame timing through ffprobe, and write Overlays through ffmpeg."""
+"""Read a Chapter's frame timing through ffprobe, and write Overlays and the Composite through ffmpeg."""
 
 import json
 import shutil
 import subprocess
 import tempfile
+from collections.abc import Iterator
 from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
@@ -151,6 +152,119 @@ def _verify_alpha(path: Path) -> None:
     pixel_format = result.stdout.strip()
     if not pixel_format.startswith("yuva"):
         raise VideoError(f"{path.name} came out as {pixel_format or 'unreadable'}, without an alpha channel")
+
+
+@dataclass(frozen=True)
+class Encoding:
+    """How the Composite's video is encoded."""
+
+    encoder: str
+    """The ffmpeg video encoder, e.g. `libx265`."""
+    preset: str
+    """The encoder's trade of speed against size, e.g. `slow`."""
+    crf: float
+    """The encoder's constant quality: lower is better, and bigger."""
+    pixel_format: str
+    """e.g. `yuv420p10le`, 10-bit."""
+
+    def __str__(self) -> str:
+        return f"{self.encoder} -preset {self.preset} -crf {self.crf:g}, {self.pixel_format}"
+
+
+@dataclass(frozen=True)
+class PlacedOverlay:
+    """An Overlay's file, and where its top-left pixel goes on the footage's frame."""
+
+    path: Path
+    x: int
+    y: int
+
+
+_HEVC_ENCODERS = {"libx265", "hevc_videotoolbox"}
+"""Encoders whose streams are tagged `hvc1`, which QuickTime needs to play them."""
+
+_COLOUR_TAGS = {
+    "color_range": "range",
+    "color_space": "colorspace",
+    "color_transfer": "color_trc",
+    "color_primaries": "color_primaries",
+}
+"""ffprobe's name for each colour tag, and the `setparams` filter's."""
+
+
+def composite(chapters: list[Path], overlays: list[PlacedOverlay], path: Path, encoding: Encoding) -> Iterator[int]:
+    """Burn each Overlay, in order, onto the Chapters joined end to end, into a new video at `path`, tagged with the
+    first Chapter's colour tags and with its audio copied unchanged; yielding how many frames are done as it goes.
+
+    The Chapters are only read. The file appears at `path` only once it is complete.
+    """
+    partial = path.with_name(f"{path.stem}.partial{path.suffix}")
+    graph, last = [f"[0:v]format={encoding.pixel_format}[v0]"], "v0"
+    for i, overlay in enumerate(overlays, start=1):
+        graph.append(f"[{last}][{i}:v]overlay=x={overlay.x}:y={overlay.y}:format=auto[v{i}]")
+        last = f"v{i}"
+    tags = ":".join(f"{_COLOUR_TAGS[name]}={value}" for name, value in _colour_tags(chapters[0]).items())
+    graph.append(f"[{last}]setparams={tags}[out]" if tags else f"[{last}]null[out]")
+    with tempfile.TemporaryDirectory() as temp, tempfile.TemporaryFile() as errors:
+        joined = Path(temp) / "chapters.txt"
+        joined.write_text("".join(f"file '{_quoted(chapter.absolute())}'\n" for chapter in chapters))
+        ffmpeg = subprocess.Popen(
+            [
+                _require("ffmpeg"),
+                *("-v", "error", "-y", "-nostdin", "-progress", "pipe:1", "-nostats"),
+                *("-f", "concat", "-safe", "0", "-i", str(joined)),
+                *(arg for overlay in overlays for arg in ("-i", str(overlay.path))),
+                *("-filter_complex", ";".join(graph), "-map", "[out]", "-map", "0:a?", "-c:a", "copy"),
+                *("-c:v", encoding.encoder, "-preset", encoding.preset, "-crf", f"{encoding.crf:g}"),
+                *("-pix_fmt", encoding.pixel_format),
+                *(("-tag:v", "hvc1") if encoding.encoder in _HEVC_ENCODERS else ()),
+                *("-movflags", "+faststart", "-f", "mp4", str(partial)),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=errors,
+            text=True,
+        )
+        try:
+            assert ffmpeg.stdout
+            for line in ffmpeg.stdout:
+                key, _, value = line.strip().partition("=")
+                if key == "frame":
+                    yield int(value)
+            if (status := ffmpeg.wait()) != 0:
+                errors.seek(0)
+                message = errors.read().decode(errors="replace").strip()
+                if not message:
+                    message = f"killed by signal {-status}" if status < 0 else f"exited with status {status}"
+                raise VideoError(f"ffmpeg could not write {path.name}: {message}")
+            partial.replace(path)
+        finally:
+            if ffmpeg.poll() is None:
+                ffmpeg.kill()
+                ffmpeg.wait()
+            partial.unlink(missing_ok=True)
+
+
+def _colour_tags(path: Path) -> dict[str, str]:
+    """The colour tags of a video's stream that it has, by ffprobe's names for them."""
+    result = subprocess.run(
+        [
+            _require("ffprobe"),
+            *("-v", "error", "-select_streams", "v:0", "-of", "json"),
+            *("-show_entries", f"stream={','.join(_COLOUR_TAGS)}"),
+            str(path),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    streams: list[dict[str, str]] = json.loads(result.stdout or "{}").get("streams", [])
+    if result.returncode != 0 or not streams:
+        raise VideoError(f"ffprobe could not read the colours of {path.name}: {result.stderr.strip()}")
+    return {name: value for name, value in streams[0].items() if name in _COLOUR_TAGS and value != "unknown"}
+
+
+def _quoted(path: Path) -> str:
+    """`path` for a single-quoted entry in ffmpeg's concat list."""
+    return str(path).replace("'", "'\\''")
 
 
 _INSTALL = "brew install ffmpeg"

@@ -11,6 +11,7 @@ from pov_radar.placement import Corner
 from pov_radar.ride import KMH_PER_MS, MAX_GAP, MAX_INTERPOLATED_GAP, MAX_SPEED, HeadingSmoothing
 from pov_radar.roads import MINIMAP_REACH
 from pov_radar.style import Style
+from pov_radar.video import Encoding
 
 DEFAULT_PATH = Path("config.yaml")
 """The config file read, from the working directory, when none is named."""
@@ -74,6 +75,23 @@ class OverviewConfig(Placed):
     corner: Corner = "top-left"
 
 
+class CompositeConfig(_Section):
+    """How the Composite is encoded."""
+
+    encoder: str = "libx265"
+    """The ffmpeg video encoder."""
+    preset: str = "slow"
+    """The encoder's trade of speed against size; `--fast` overrides it for previews."""
+    crf: float = Field(default=16, ge=0, le=51)
+    """The encoder's constant quality: lower is better, and bigger."""
+    pixel_format: str = "yuv420p10le"
+    """10-bit, so the Overlays' gradients don't band."""
+
+    def encoding(self) -> Encoding:
+        """As the encoder takes it."""
+        return Encoding(**self.model_dump())
+
+
 class Config(_Section):
     """Every setting of a run."""
 
@@ -82,6 +100,7 @@ class Config(_Section):
     minimap: MinimapConfig = MinimapConfig()
     overview: OverviewConfig = OverviewConfig()
     style: Style = Style()
+    composite: CompositeConfig = CompositeConfig()
     attribution: Literal["file", "burn_in"] = "file"
     """`file` writes the OpenStreetMap credit to ATTRIBUTION.txt beside the Overlays; `burn_in` also draws it on the
     Overview."""
