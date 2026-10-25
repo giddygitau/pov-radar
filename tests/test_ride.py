@@ -474,3 +474,47 @@ def test_a_self_crossing_route_splits_by_time_at_the_crossing() -> None:
     assert len(first.completed) - 1 == 3, "Samples at 0, 1 and 2 s are Completed"
     assert len(second.completed) - 1 == 11, "the first pass through the crossing stays Completed"
     assert len(second.upcoming) - 1 == 2, "only the leg south of the crossing is Upcoming"
+
+
+def test_before_the_first_fix_the_overlays_are_hidden() -> None:
+    ride = riding_east([0, 0, 3, 3, 3])
+
+    assert ride.at(0.0).visibility == ride.at(1.9).visibility == "hidden"
+    assert ride.at(2.0).visibility == "live", "from the first Fix on"
+
+
+def test_after_the_last_fix_the_current_position_holds_at_the_final_sample() -> None:
+    ride = riding_east([3, 3, 3, 0])
+
+    last, after = ride.at(2.0), ride.at(3.5)
+
+    assert last.visibility == "live"
+    assert after.visibility == "held_final"
+    assert after.metres == last.metres
+
+
+def test_across_a_short_fix_gap_the_current_position_is_interpolated() -> None:
+    ride = riding_east([3, 0, 3])
+
+    state = ride.at(1.0)
+
+    assert state.visibility == "live"
+    assert state.metres[0] - ride.at(0.0).metres[0] == pytest.approx(EAST_STEP, rel=0.01), "halfway across 2 s"
+
+
+def test_during_a_long_fix_gap_the_current_position_holds_dimmed_at_the_last_sample() -> None:
+    # Valid at 0 s, then no Fix until 10 s.
+    ride = riding_east([3] + [0] * 9 + [3, 3])
+
+    held = [ride.at(t) for t in (0.1, 5.0, 9.9)]
+
+    assert [state.visibility for state in held] == ["held_dimmed"] * 3
+    assert all(state.metres == ride.at(0.0).metres for state in held), "never moving towards the next Fix"
+    assert ride.at(0.0).visibility == ride.at(10.0).visibility == "live", "at the valid Samples either side"
+
+
+def test_the_longest_fix_gap_interpolated_across_is_configurable() -> None:
+    ride = riding_east([3, 0, 3])
+
+    assert ride.at(1.0, max_interpolated_gap=1.5).visibility == "held_dimmed"
+    assert ride.at(1.0, max_interpolated_gap=2.0).visibility == "live", "a gap exactly at the limit is interpolated"

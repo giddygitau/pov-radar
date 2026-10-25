@@ -68,12 +68,20 @@ class MultiLineString(BaseModel):
     """Lines of (longitude, latitude) positions."""
 
 
+Visibility = Literal["hidden", "live", "held_dimmed", "held_final"]
+"""How the Overlays show the Current position (ADR-0004): `hidden` before the first Fix, fully transparent; `live`
+at or between valid Samples; `held_dimmed` at the last valid Sample during a Fix gap too long to interpolate across;
+`held_final` at the last valid Sample once it has passed."""
+
+
 @dataclass(frozen=True)
 class FrameState:
     """The Ride at one instant on the Video timeline."""
 
     time: float
     """Seconds on the Video timeline."""
+    visibility: Visibility
+    """How the Overlays show the Current position; while hidden, nothing should be drawn from it."""
     latitude: float
     longitude: float
     """The Current position."""
@@ -97,6 +105,9 @@ class FrameState:
 
 MAX_GAP = 0.5
 """Seconds without a valid Sample longer than which, by default, there is a Fix gap."""
+
+MAX_INTERPOLATED_GAP = 3.0
+"""Seconds between valid Samples, by default, across which the Current position is interpolated rather than held."""
 
 
 class Ride(BaseModel):
@@ -135,22 +146,41 @@ class Ride(BaseModel):
         """Local metres centred on the valid Samples, shared by everything drawn for the Ride."""
         return LocalProjection.around(self)
 
-    def at(self, t: float) -> FrameState:
+    def at(self, t: float, max_interpolated_gap: float = MAX_INTERPOLATED_GAP) -> FrameState:
         """The Ride `t` seconds into the Video timeline, interpolated in metres between the valid Samples either
-        side; held at the first or last one outside them.
+        side if they're at most `max_interpolated_gap` seconds apart; never extrapolated (ADR-0004).
 
-        For now this crosses Fix gaps of any length and holds before the first Fix; the playback policy of
-        ADR-0004 (hidden, held dimmed) is still to come.
+        Before the first valid Sample it is hidden at it; across a longer Fix gap, and after the last valid Sample,
+        it holds at the last one passed.
         """
         times, metres = self._timeline
         if not len(times):
             raise ValueError("A Ride with no valid Samples has no Current position")
-        x, y = (float(np.interp(t, times, column)) for column in (metres[:, 0], metres[:, 1]))
-        longitude, latitude = self.projection.to_degrees(x, y)
         # The Split point follows every Sample at or before `t`, so the Route is split by time, not by place.
         passed = int(np.searchsorted(times, t, side="right"))
+        if not passed:
+            visibility: Visibility = "hidden"
+        elif t == times[passed - 1]:
+            visibility = "live"
+        elif passed == len(times):
+            visibility = "held_final"
+        elif times[passed] - times[passed - 1] > max_interpolated_gap:
+            visibility = "held_dimmed"
+        else:
+            visibility = "live"
+        if visibility == "live":
+            x, y = (float(np.interp(t, times, column)) for column in (metres[:, 0], metres[:, 1]))
+        else:
+            x, y = (float(value) for value in metres[max(passed - 1, 0)])
+        longitude, latitude = self.projection.to_degrees(x, y)
         return FrameState(
-            time=t, latitude=latitude, longitude=longitude, metres=(x, y), passed=passed, route=metres
+            time=t,
+            visibility=visibility,
+            latitude=latitude,
+            longitude=longitude,
+            metres=(x, y),
+            passed=passed,
+            route=metres,
         )
 
     @cached_property

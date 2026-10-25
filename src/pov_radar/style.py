@@ -47,6 +47,9 @@ class Style:
     """Width of the glow beneath the Upcoming route, relative to the route's."""
     marker: Colour = (255, 255, 255, 255)
     """The Current position's marker."""
+    marker_held: Colour = (255, 255, 255, 110)
+    """The marker held at the last valid position during a Fix gap too long to interpolate across: dimmed, so it
+    reads as a lost Fix rather than as the motorcycle standing still."""
     marker_halo: Colour = (0, 0, 0, 160)
     """The dark ring around the marker that keeps it visible over the bright Upcoming route."""
     route_width: float = 0.0040

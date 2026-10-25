@@ -1,7 +1,7 @@
 """The `pov-radar` command line."""
 
 from collections.abc import Callable
-from functools import cache
+from functools import cache, partial
 from pathlib import Path
 from statistics import fmean
 from typing import Annotated
@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from pov_radar import maps
 from pov_radar.chapter import ChapterError, read_ride
 from pov_radar.recording import DiscoveryError, Recording, discover
-from pov_radar.ride import KMH_PER_MS, MAX_GAP, MAX_SPEED, Ride, join
+from pov_radar.ride import KMH_PER_MS, MAX_GAP, MAX_INTERPOLATED_GAP, MAX_SPEED, Ride, join
 from pov_radar.overview import Overview, write_png
 from pov_radar.roads import MINIMAP_REACH, MapData, RoadClass, RoadNetwork
 from pov_radar.video import OverlayWriter, VideoError, read_frames
@@ -72,6 +72,14 @@ MaxGap = Annotated[
     float,
     typer.Option(help="Seconds without a valid Sample longer than which there is a Fix gap", min=0),
 ]
+MaxInterpolatedGap = Annotated[
+    float,
+    typer.Option(
+        help="Seconds of Fix gap across which the Current position is interpolated; "
+        "across longer ones it holds, dimmed, at the last valid Sample",
+        min=0,
+    ),
+]
 
 
 @app.command()
@@ -84,10 +92,15 @@ def inspect(
 
 @app.command()
 def render(
-    sources: Sources, out: Out = None, max_speed: MaxSpeed = MAX_SPEED * KMH_PER_MS, max_gap: MaxGap = MAX_GAP
+    sources: Sources,
+    out: Out = None,
+    max_speed: MaxSpeed = MAX_SPEED * KMH_PER_MS,
+    max_gap: MaxGap = MAX_GAP,
+    max_interpolated_gap: MaxInterpolatedGap = MAX_INTERPOLATED_GAP,
 ) -> None:
     """Inspect each Ride, as `inspect` does, then render its Overview as overview.mov, a transparent Overlay."""
-    _each_ride(sources, out, max_speed / KMH_PER_MS, max_gap, _render)
+    render_ride = partial(_render, max_interpolated_gap=max_interpolated_gap)
+    _each_ride(sources, out, max_speed / KMH_PER_MS, max_gap, render_ride)
 
 
 class Inspected(BaseModel, arbitrary_types_allowed=True):
@@ -172,8 +185,9 @@ def _inspect(
     return Inspected(ride=ride, roads=roads)
 
 
-def _render(recording: Recording, out: Path, inspected: Inspected) -> bool:
-    """Render the Overview Overlay frame for frame with the Ride's footage; False if it couldn't be."""
+def _render(recording: Recording, out: Path, inspected: Inspected, max_interpolated_gap: float) -> bool:
+    """Render the Overview Overlay frame for frame with the Ride's footage, interpolating across Fix gaps of up to
+    `max_interpolated_gap` seconds; False if it couldn't be."""
     ride = inspected.ride
     path = out / "overview.mov"
     try:
@@ -185,7 +199,7 @@ def _render(recording: Recording, out: Path, inspected: Inspected) -> bool:
             typer.progressbar(range(frames.count), label=f"Rendering {path.name}", show_percent=True) as bar,
         ):
             for frame in bar:
-                writer.write(draw(ride.at(float(frame / frames.rate))))
+                writer.write(draw(ride.at(float(frame / frames.rate), max_interpolated_gap)))
     except VideoError as error:
         typer.echo(f"Error: {error}", err=True)
         return False

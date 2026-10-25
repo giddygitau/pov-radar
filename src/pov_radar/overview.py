@@ -59,24 +59,28 @@ class Overview:
 
     def frames(self, roads: RoadNetwork) -> Callable[[FrameState], NDArray[np.uint8]]:
         """A function drawing the Overview at a frame state: the Route Completed up to the Split point and Upcoming
-        after it, with a dot there above every line. The roads beneath are drawn once, here."""
+        after it, with a dot there above every line, dimmed while held in a Fix gap; nothing at all while hidden.
+        The roads beneath are drawn once, here."""
         surface = skia.Surface(self.width, self.height)
         self._draw_ground(surface.getCanvas(), roads)
         ground = surface.makeImageSnapshot()
         s, h = self.style, self.frame_height
         halo = skia.Paint(Color=_colour(s.marker_halo), AntiAlias=True)
         dot = skia.Paint(Color=_colour(s.marker), AntiAlias=True)
+        held = skia.Paint(Color=_colour(s.marker_held), AntiAlias=True)
 
         def draw(state: FrameState) -> NDArray[np.uint8]:
             canvas = surface.getCanvas()
             canvas.clear(skia.ColorTRANSPARENT)
+            if state.visibility == "hidden":
+                return _pixels(surface)
             canvas.drawImage(ground, 0, 0)
             split = int(np.searchsorted(self._kept, state.passed))
             here = self._pixels(np.array([state.metres]))
             self._draw_route(canvas, np.vstack([self._drawn[:split], here]), np.vstack([here, self._drawn[split:]]))
             ((x, y),) = here
             canvas.drawCircle(x, y, s.overview_dot_halo * h, halo)
-            canvas.drawCircle(x, y, s.overview_dot * h, dot)
+            canvas.drawCircle(x, y, s.overview_dot * h, held if state.visibility == "held_dimmed" else dot)
             return _pixels(surface)
 
         return draw

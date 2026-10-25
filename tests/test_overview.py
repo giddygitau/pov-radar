@@ -25,7 +25,7 @@ ORIGIN = (-1.29, 36.82)
 DEGREES_PER_KM = 1 / 111.32
 
 
-def ride(points_km: list[tuple[float, float]], spacing: float = 5.0) -> Ride:
+def ride(points_km: list[tuple[float, float]], spacing: float = 2.0) -> Ride:
     """Valid Samples `spacing` seconds apart at (east, north) km from ORIGIN."""
     return Ride(
         duration=spacing * len(points_km),
@@ -160,12 +160,12 @@ def _square_pixels(size: int, start_km: float, end_km: float) -> slice:
 
 @pytest.mark.parametrize(
     ("name", "time", "at_km"),
-    [("dot-start", 0.0, (0.0, 0.0)), ("dot-corner", 100.0, (2.0, 0.0)), ("dot-between", 127.5, (2.0, 0.55))],
+    [("dot-start", 0.0, (0.0, 0.0)), ("dot-corner", 40.0, (2.0, 0.0)), ("dot-between", 51.0, (2.0, 0.55))],
 )
 def test_a_white_dot_marks_the_current_position(
     name: str, time: float, at_km: tuple[float, float], request: pytest.FixtureRequest
 ) -> None:
-    # The square's Samples are 0.1 km and 5 s apart: 100 s is its south-east corner and 127.5 s lies between two Samples 0.55 km north of it.
+    # The square's Samples are 0.1 km and 2 s apart: 40 s is its south-east corner and 51 s lies between two Samples 0.55 km north of it.
     draw = Overview(SQUARE, FRAME_HEIGHT).frames(roads(SQUARE, SQUARE_ROADS))
 
     image = draw(SQUARE.at(time))
@@ -181,7 +181,7 @@ def test_a_white_dot_marks_the_current_position(
 
 
 # East along the bottom, up the east side, back west along the top, then south through the bottom leg at (1, 0.5) km,
-# which it first passed at 50 s and passes again at 300 s; Samples 5 s apart, 330 s in all.
+# which it first passed at 20 s and passes again at 120 s; Samples 2 s apart, 132 s in all.
 CROSSING = ride(
     along((0, 0.5), (2, 0.5), 20)
     + along((2, 0.5), (2, 2), 15)[1:]
@@ -215,8 +215,8 @@ UPCOMING, COMPLETED = (True, False), (False, True)
     ("name", "time", "expected"),
     [
         ("split-start", 0.0, {(0.5, 0.5): UPCOMING, (2.0, 1.2): UPCOMING, (1.0, 0.2): UPCOMING}),
-        ("split-crossing", 300.0, {(0.5, 0.5): COMPLETED, (2.0, 1.2): COMPLETED, (1.0, 0.2): UPCOMING}),
-        ("split-end", 330.0, {(0.5, 0.5): COMPLETED, (2.0, 1.2): COMPLETED, (1.0, 0.2): COMPLETED}),
+        ("split-crossing", 120.0, {(0.5, 0.5): COMPLETED, (2.0, 1.2): COMPLETED, (1.0, 0.2): UPCOMING}),
+        ("split-end", 132.0, {(0.5, 0.5): COMPLETED, (2.0, 1.2): COMPLETED, (1.0, 0.2): COMPLETED}),
     ],
 )
 def test_the_route_is_completed_up_to_the_dot_and_upcoming_after_it_by_time(
@@ -228,3 +228,29 @@ def test_the_route_is_completed_up_to_the_dot_and_upcoming_after_it_by_time(
 
     assert {point: colours_at(image, *point) for point in expected} == expected
     assert_matches_golden(image, name, request)
+
+
+def test_before_the_first_fix_the_overview_is_fully_transparent() -> None:
+    late = Ride(duration=SQUARE.duration, samples=SQUARE.samples[2:])
+    overview = Overview(late, FRAME_HEIGHT)
+    draw = overview.frames(roads(late, SQUARE_ROADS))
+
+    image = draw(late.at(2.0))
+
+    assert image.shape == (overview.height, overview.width, 4), "the Overlay keeps its size"
+    assert not image.any(), "every pixel is transparent black"
+
+
+def test_during_a_long_fix_gap_the_dot_holds_dimmed_at_the_last_position(request: pytest.FixtureRequest) -> None:
+    # No valid Sample between the south-east corner at 40 s and the next at 46 s.
+    gap = Ride(duration=SQUARE.duration, samples=[s for s in SQUARE.samples if s.time not in (42.0, 44.0)])
+    draw = Overview(gap, FRAME_HEIGHT).frames(roads(gap, SQUARE_ROADS))
+
+    live, held = draw(gap.at(40.0)), draw(gap.at(43.0))
+
+    row = _square_pixels(held.shape[0], 2.0, 2.0).start
+    column = _square_pixels(held.shape[1], 2.0, 2.0).start
+    assert (live[row, column, :3] > 240).all(), "white at the corner while the Fix lasts"
+    assert held[row, column, :3].max() < 200, "dimmed at the corner during the gap"
+    assert int(held[row, column, 0]) > int(held[row + 20, column - 20, 0]), "but still brighter than the bare surface"
+    assert_matches_golden(held, "dot-held-dimmed", request)
