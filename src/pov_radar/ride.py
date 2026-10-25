@@ -11,7 +11,7 @@ from typing import Literal
 
 import numpy as np
 from numpy.typing import NDArray
-from pydantic import BaseModel
+from pydantic import BaseModel, PrivateAttr
 
 from pov_radar.projection import LocalProjection
 
@@ -87,6 +87,8 @@ class FrameState:
     """The Current position."""
     metres: tuple[float, float]
     """The Current position in the Ride's projection: metres east and north of its centre."""
+    heading: float
+    """The Heading: degrees clockwise from north, from 0 up to 360."""
     passed: int
     """How many of the Ride's valid Samples are at or before `time`, and so on the Completed route."""
     route: NDArray[np.float64]
@@ -103,11 +105,42 @@ class FrameState:
         return np.vstack([[self.metres], self.route[self.passed :]])
 
 
+KMH_PER_MS = 3.6
+"""Kilometres per hour in one metre per second; exiftool reports GPSSpeed in km/h."""
+
 MAX_GAP = 0.5
 """Seconds without a valid Sample longer than which, by default, there is a Fix gap."""
 
 MAX_INTERPOLATED_GAP = 3.0
 """Seconds between valid Samples, by default, across which the Current position is interpolated rather than held."""
+
+
+@dataclass(frozen=True)
+class HeadingSmoothing:
+    """How Heading is derived from movement, independently of the Current position."""
+
+    window: float = 1.0
+    """Seconds of travel, centred on the instant, whose overall direction is the Heading."""
+    min_speed: float = 8 / KMH_PER_MS
+    """Metres per second below which the direction of travel is too noisy to trust, so the Heading holds at the last
+    moment the motorcycle was faster."""
+
+
+@dataclass(frozen=True)
+class _Spell:
+    """A spell of travel: a stretch of the Video timeline throughout which the motorcycle's direction is
+    trustworthy enough to be its Heading."""
+
+    start: float
+    end: float
+    """Seconds on the Video timeline."""
+    pulled_away: bool
+    """Whether it began with the motorcycle speeding up, rather than at a Fix after none."""
+
+
+def _crossing(times: NDArray[np.float64], speeds: NDArray[np.float64], i: int, speed: float) -> float:
+    """When the speed, interpolated between valid Samples `i` and `i + 1`, passes `speed`."""
+    return float(times[i] + (speed - speeds[i]) / (speeds[i + 1] - speeds[i]) * (times[i + 1] - times[i]))
 
 
 class Ride(BaseModel):
@@ -116,6 +149,9 @@ class Ride(BaseModel):
     samples: list[Sample]
     issues: list[Issue] = []
     """Runs of invalid Samples, in time order."""
+    _spells_drawn: dict[tuple[float, HeadingSmoothing], list[_Spell]] = PrivateAttr(
+        default_factory=dict[tuple[float, HeadingSmoothing], list[_Spell]]
+    )
 
     @property
     def valid_samples(self) -> list[Sample]:
@@ -146,7 +182,12 @@ class Ride(BaseModel):
         """Local metres centred on the valid Samples, shared by everything drawn for the Ride."""
         return LocalProjection.around(self)
 
-    def at(self, t: float, max_interpolated_gap: float = MAX_INTERPOLATED_GAP) -> FrameState:
+    def at(
+        self,
+        t: float,
+        max_interpolated_gap: float = MAX_INTERPOLATED_GAP,
+        heading: HeadingSmoothing = HeadingSmoothing(),
+    ) -> FrameState:
         """The Ride `t` seconds into the Video timeline, interpolated in metres between the valid Samples either
         side if they're at most `max_interpolated_gap` seconds apart; never extrapolated (ADR-0004).
 
@@ -179,9 +220,83 @@ class Ride(BaseModel):
             latitude=latitude,
             longitude=longitude,
             metres=(x, y),
+            heading=self._heading(t, passed, max_interpolated_gap, heading),
             passed=passed,
             route=metres,
         )
+
+    def _heading(self, t: float, passed: int, max_interpolated_gap: float, smoothing: HeadingSmoothing) -> float:
+        """The direction of up to `smoothing.window` seconds of travel centred on `t`, within its spell of travel;
+        between spells, held at the end of the last one, or before the first at its start; while held in a Fix gap,
+        as at the last valid Sample passed, so the map stays frozen. North if the motorcycle never travels.
+
+        For half a window after pulling away it turns from the held Heading to the new one, so the map doesn't
+        snap round when the motorcycle moves off in a new direction.
+        """
+        times = self._timeline[0]
+        if passed and t != times[passed - 1]:
+            if passed == len(times) or times[passed] - times[passed - 1] > max_interpolated_gap:
+                t = float(times[passed - 1])
+        spells = self._spells(max_interpolated_gap, smoothing)
+        if not spells:
+            return 0.0
+        half = smoothing.window / 2
+        k = bisect_left(spells, t, key=lambda spell: spell.end)
+        if k == len(spells):
+            return self._heading_between(max(spells[-1].end - half, spells[-1].start), spells[-1].end)
+        spell = spells[k]
+        if t <= spell.start:
+            if not k:
+                return self._heading_between(spell.start, min(spell.start + half, spell.end))
+            return self._heading_between(max(spells[k - 1].end - half, spells[k - 1].start), spells[k - 1].end)
+        heading = self._heading_between(max(t - half, spell.start), min(t + half, spell.end))
+        if not k or not spell.pulled_away or t - spell.start >= half:
+            return heading
+        held = self._heading_between(max(spells[k - 1].end - half, spells[k - 1].start), spells[k - 1].end)
+        return (held + ((heading - held + 180) % 360 - 180) * (t - spell.start) / half) % 360
+
+    def _spells(self, max_interpolated_gap: float, smoothing: HeadingSmoothing) -> list["_Spell"]:
+        """The spells of travel, in time order: at `smoothing.min_speed` or faster, without a Fix gap too long to
+        interpolate across, for at least half `smoothing.window`, so a moment of speed noise at a standstill isn't
+        one. Drawn up once for each setting."""
+        key = (max_interpolated_gap, smoothing)
+        if key not in self._spells_drawn:
+            times, speeds, slowest = self._timeline[0], self._speeds, smoothing.min_speed
+            spells: list[_Spell] = []
+            start: float | None = None
+            pulled_away = False
+            for i in range(len(times)):
+                if start is None and speeds[i] >= slowest:
+                    gap = not i or times[i] - times[i - 1] > max_interpolated_gap
+                    start, pulled_away = float(times[i]), not gap
+                    if not gap:
+                        start = _crossing(times, speeds, i - 1, slowest)
+                if start is None:
+                    continue
+                if i + 1 == len(times) or times[i + 1] - times[i] > max_interpolated_gap:
+                    end = float(times[i])
+                elif speeds[i + 1] < slowest:
+                    end = _crossing(times, speeds, i, slowest)
+                else:
+                    continue
+                if end - start >= smoothing.window / 2:
+                    spells.append(_Spell(start, end, pulled_away))
+                start = None
+            self._spells_drawn[key] = spells
+        return self._spells_drawn[key]
+
+    def _heading_between(self, start: float, end: float) -> float:
+        """The Heading from the Current position at `start` seconds to that at `end`."""
+        times, metres = self._timeline
+        (x0, y0), (x1, y1) = (
+            (float(np.interp(at, times, metres[:, 0])), float(np.interp(at, times, metres[:, 1]))) for at in (start, end)
+        )
+        return math.degrees(math.atan2(x1 - x0, y1 - y0)) % 360
+
+    @cached_property
+    def _speeds(self) -> NDArray[np.float64]:
+        """The valid Samples' speeds, in metres per second, beside `_timeline`."""
+        return np.array([s.speed for s in self.valid_samples], dtype=np.float64)
 
     @cached_property
     def _timeline(self) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
@@ -192,9 +307,6 @@ class Ride(BaseModel):
             return times, np.empty((0, 2))
         return times, self.projection.to_metres([s.longitude for s in valid], [s.latitude for s in valid])
 
-
-KMH_PER_MS = 3.6
-"""Kilometres per hour in one metre per second; exiftool reports GPSSpeed in km/h."""
 
 MAX_SPEED = 250 / KMH_PER_MS
 """Metres per second faster than which, by default, a motorcycle can't have travelled between two Samples."""

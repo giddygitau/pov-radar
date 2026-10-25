@@ -4,7 +4,7 @@ from typing import Literal
 
 import pytest
 
-from pov_radar.ride import KMH_PER_MS, FrameState, Ride, TelemetryError, join, parse_ride
+from pov_radar.ride import KMH_PER_MS, FrameState, HeadingSmoothing, Ride, TelemetryError, join, parse_ride
 
 GPS_COLUMNS = ["GPSLatitude", "GPSLongitude", "GPSAltitude", "GPSSpeed"]
 
@@ -518,3 +518,186 @@ def test_the_longest_fix_gap_interpolated_across_is_configurable() -> None:
 
     assert ride.at(1.0, max_interpolated_gap=1.5).visibility == "held_dimmed"
     assert ride.at(1.0, max_interpolated_gap=2.0).visibility == "live", "a gap exactly at the limit is interpolated"
+
+
+def travelling(steps: list[tuple[float, float, float]], rate: int = 10) -> Ride:
+    """`rate` Samples a second at each (east, north, km/h), east and north in steps of 0.00001° (~1.1 m) from ROW."""
+    payloads = [
+        Payload(
+            sample_time=float(t),
+            gps=[
+                (ROW[0] + north * 0.00001, ROW[1] + east * 0.00001, ROW[2], kmh)
+                for east, north, kmh in steps[t * rate : (t + 1) * rate]
+            ],
+        )
+        for t in range(math.ceil(len(steps) / rate))
+    ]
+    return parse_ride(exiftool_text(*payloads), duration=len(steps) / rate)
+
+
+def straight(start: tuple[float, float], heading: float, count: int, kmh: float = 40.0) -> list[tuple[float, float, float]]:
+    """`count` Samples from `start` towards `heading`, degrees clockwise from north, at 10 Hz and `kmh`."""
+    step = kmh / KMH_PER_MS / 10 / 1.1
+    east, north = math.sin(math.radians(heading)) * step, math.cos(math.radians(heading)) * step
+    return [(start[0] + east * k, start[1] + north * k, kmh) for k in range(count)]
+
+
+def turned(a: float, b: float) -> float:
+    """Degrees clockwise from Heading `a` to Heading `b`, the short way round: -180 up to 180."""
+    return (b - a + 180) % 360 - 180
+
+
+def headings(ride: Ride, start: float, end: float, fps: int = 30) -> list[float]:
+    """The Heading at every frame from `start` to `end` seconds, at `fps` frames a second."""
+    return [ride.at(start + k / fps).heading for k in range(round((end - start) * fps) + 1)]
+
+
+def arc(centre: tuple[float, float], radius: float, start: float, sweep: float, kmh: float) -> list[tuple[float, float, float]]:
+    """Samples at 10 Hz and `kmh` round a circle of `radius` steps, from `start` degrees clockwise from north
+    of `centre` through `sweep` degrees clockwise."""
+    count = round(abs(sweep) * math.pi / 180 * radius * 1.1 / (kmh / KMH_PER_MS / 10))
+    angles = [math.radians(start + sweep * k / count) for k in range(count)]
+    return [(centre[0] + radius * math.sin(a), centre[1] + radius * math.cos(a), kmh) for a in angles]
+
+
+@pytest.mark.parametrize("heading", [0.0, 45.0, 90.0, 180.0, 270.0])
+def test_along_a_straight_line_the_heading_is_its_direction_clockwise_from_north(heading: float) -> None:
+    ride = travelling(straight((0, 0), heading, 50))
+
+    assert all(abs(turned(heading, ride.at(t).heading)) < 1 for t in (0.0, 2.0, 4.9))
+
+
+def test_through_a_right_angle_bend_the_heading_turns_smoothly_across_about_a_second() -> None:
+    # North for 3 s, then east for 3 s from the corner at 3 s.
+    north = straight((0, 0), 0.0, 30)
+    ride = travelling(north + straight((north[-1][0], north[-1][1] + north[1][1]), 90.0, 30))
+    turn = headings(ride, 2.0, 4.0)
+
+    assert abs(turned(0.0, ride.at(2.4).heading)) < 1, "north until half a second before the corner"
+    assert ride.at(3.0).heading == pytest.approx(45.0, abs=5.0), "halfway round at the corner"
+    assert ride.at(3.6).heading == pytest.approx(90.0, abs=1.0), "east from half a second after"
+    assert all(0 <= turned(a, b) < 5 for a, b in zip(turn, turn[1:])), "clockwise, a few degrees a frame at most"
+
+
+def test_through_a_u_turn_the_heading_comes_round_the_way_the_motorcycle_does() -> None:
+    # North at 20 km/h, round a 10 m-wide semicircle to the right, then south.
+    up = straight((0, 0), 0.0, 20, kmh=20)
+    radius = 4.5
+    bend = arc((up[-1][0] + radius, up[-1][1]), radius, 270.0, 180.0, kmh=20)
+    ride = travelling(up + bend + straight((2 * radius, up[-1][1]), 180.0, 20, kmh=20))
+    turn = headings(ride, 1.0, ride.duration - 1.0)
+
+    assert abs(turned(0.0, turn[0])) < 2 and abs(turned(180.0, turn[-1])) < 2
+    assert abs(turned(90.0, ride.at(ride.duration / 2).heading)) < 10, "east at the far end of the turn"
+    assert all(0 <= turned(a, b) < 15 for a, b in zip(turn, turn[1:])), "clockwise all the way, without flipping"
+
+
+def test_turning_through_north_the_heading_wraps_from_just_under_360_to_just_over_0() -> None:
+    # Round a wide right-hand curve from north-west to north-east.
+    ride = travelling(arc((50, 0), 50.0, 225.0, 90.0, kmh=40))
+    turn = headings(ride, 0.5, ride.duration - 0.5)
+
+    assert 300 < turn[0] < 360 and 0 <= turn[-1] < 60
+    assert all(0 <= heading < 360 for heading in turn)
+    assert all(0 <= turned(a, b) < 3 for a, b in zip(turn, turn[1:])), "steadily clockwise, no jump at north"
+
+
+def stopping(start: tuple[float, float], heading: float, kmh: float) -> list[tuple[float, float, float]]:
+    """Slowing evenly from `kmh` to a stop over 2 s along `heading`, at 10 Hz."""
+    rows: list[tuple[float, float, float]] = []
+    east, north = start
+    for k in range(20):
+        speed = kmh * (1 - k / 20)
+        rows.append((east, north, speed))
+        step = speed / KMH_PER_MS / 10 / 1.1
+        east, north = east + math.sin(math.radians(heading)) * step, north + math.cos(math.radians(heading)) * step
+    return rows
+
+
+def jittering(at: tuple[float, float], seconds: float, metres: float = 1.5) -> list[tuple[float, float, float]]:
+    """Standing at `at` for `seconds`, at 10 Hz, as GPS reports it: positions scattered by up to `metres` and a
+    speed just above zero."""
+    scatter = [math.sin(k * 12.9898) * 43758.5453 % 1 * 2 - 1 for k in range(round(seconds * 20))]
+    return [(at[0] + scatter[2 * k] * metres / 1.1, at[1] + scatter[2 * k + 1] * metres / 1.1, 0.4) for k in range(round(seconds * 10))]
+
+
+def test_standing_still_with_gps_jitter_the_heading_holds_exactly_at_the_last_good_one() -> None:
+    # North-east at 40 km/h, slowing to a stop, then 3 s standing still while the position wanders.
+    moving = straight((0, 0), 45.0, 20)
+    slowing = stopping((moving[-1][0] + moving[1][0], moving[-1][1] + moving[1][1]), 45.0, 40.0)
+    ride = travelling(moving + slowing + jittering(slowing[-1][:2], 3.0))
+    standing = headings(ride, 4.0, ride.duration)
+
+    assert len(set(standing)) == 1, "perfectly still, not a flicker"
+    assert abs(turned(45.0, standing[0])) < 1, "still facing the way it stopped"
+
+
+def test_stopping_at_a_junction_then_turning_away_holds_the_heading_until_moving_again() -> None:
+    # North, stopped 4 s at the junction with the position wandering, then off east, slowly at first.
+    north = straight((0, 0), 0.0, 30)
+    slowing = stopping((north[-1][0], north[-1][1] + north[1][1]), 0.0, 40.0)
+    junction = slowing[-1][:2]
+    pulling_away = [(junction[0] + 0.25 * k * k / 1.1 / 10, junction[1], 2.0 * k) for k in range(1, 11)]
+    east = straight((pulling_away[-1][0] + 0.6, junction[1]), 90.0, 30, kmh=20)
+    ride = travelling(north + slowing + jittering(junction, 4.0) + pulling_away + east)
+    stopped_at = 5.0
+
+    held = headings(ride, stopped_at, 9.0)
+    assert len(set(held)) == 1 and abs(turned(0.0, held[0])) < 1, "north, still, through the stop"
+    assert len(set(headings(ride, 9.0, 9.25))) == 1, "still north while pulling away below 8 km/h"
+    assert abs(turned(90.0, ride.at(10.6).heading)) < 2, "east once moving east"
+    away = headings(ride, 9.0, 11.0)
+    assert all(0 <= turned(a, b) < 15 for a, b in zip(away, away[1:])), "turning to it without a snap"
+
+
+def test_during_a_long_fix_gap_the_heading_holds_with_the_current_position() -> None:
+    # East for 2 s, no Fix for 5 s, then north: the Heading mustn't turn towards where the Fix comes back.
+    east = straight((0, 0), 90.0, 20)
+    north = straight((east[-1][0], 100.0), 0.0, 20)
+    ride = travelling(east + [(0.0, 0.0, 0.0)] * 50 + north)
+    ride = Ride(duration=ride.duration, samples=[s for s in ride.samples if not 2.0 <= s.time < 7.0])
+
+    assert ride.at(3.0).visibility == "held_dimmed"
+    assert ride.at(3.0).heading == ride.at(6.9).heading == ride.at(1.9).heading
+    assert abs(turned(90.0, ride.at(6.9).heading)) < 1
+
+
+def test_the_heading_smoothing_is_configurable() -> None:
+    # East at 6 km/h, under the default 8 km/h below which the Heading holds; it never got faster, so north.
+    ride = travelling(straight((0, 0), 90.0, 30, kmh=6.0))
+
+    assert ride.at(1.5).heading == 0.0
+    assert abs(turned(90.0, ride.at(1.5, heading=HeadingSmoothing(min_speed=5 / KMH_PER_MS)).heading)) < 1
+    north = straight((0, 0), 0.0, 30)
+    bend = travelling(north + straight((north[-1][0], north[-1][1] + north[1][1]), 90.0, 30))
+    wide = HeadingSmoothing(window=4.0)
+    assert abs(turned(45.0, bend.at(3.0, heading=wide).heading)) < 5
+    assert 10 < bend.at(2.4, heading=wide).heading < 40, "a wider window starts turning sooner"
+
+
+def test_a_moment_of_speed_noise_while_standing_still_does_not_turn_the_heading() -> None:
+    # As standing still with jitter, but two Samples report 12 km/h halfway through.
+    moving = straight((0, 0), 45.0, 20)
+    slowing = stopping((moving[-1][0] + moving[1][0], moving[-1][1] + moving[1][1]), 45.0, 40.0)
+    standing = jittering(slowing[-1][:2], 4.0)
+    standing[20:22] = [(east, north, 12.0) for east, north, _ in standing[20:22]]
+    ride = travelling(moving + slowing + standing)
+    still = headings(ride, 4.0, ride.duration)
+
+    assert len(set(still)) == 1 and abs(turned(45.0, still[0])) < 1
+
+
+def test_creeping_in_traffic_the_heading_never_snaps() -> None:
+    # East along a road, the speed swinging between 5 and 11 km/h every second, with the position wandering.
+    rows: list[tuple[float, float, float]] = []
+    east = 0.0
+    for k in range(150):
+        kmh = 8 + 3 * math.sin(k * math.pi / 5)
+        wander = math.sin(k * 12.9898) * 43758.5453 % 1 - 0.5
+        rows.append((east, wander / 1.1, kmh))
+        east += kmh / KMH_PER_MS / 10 / 1.1
+    ride = travelling(rows)
+    creeping = headings(ride, 1.0, ride.duration - 1.0)
+
+    assert all(abs(turned(90.0, heading)) < 30 for heading in creeping), "east, give or take the wander"
+    assert all(abs(turned(a, b)) < 5 for a, b in zip(creeping, creeping[1:])), "a few degrees a frame at most"

@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from pov_radar import maps
 from pov_radar.chapter import ChapterError, read_ride
 from pov_radar.recording import DiscoveryError, Recording, discover
-from pov_radar.ride import KMH_PER_MS, MAX_GAP, MAX_INTERPOLATED_GAP, MAX_SPEED, Ride, join
+from pov_radar.ride import KMH_PER_MS, MAX_GAP, MAX_INTERPOLATED_GAP, MAX_SPEED, HeadingSmoothing, Ride, join
 from pov_radar.drawing import write_png
 from pov_radar.minimap import Minimap
 from pov_radar.overview import Overview
@@ -82,6 +82,14 @@ MaxInterpolatedGap = Annotated[
         min=0,
     ),
 ]
+HeadingWindow = Annotated[
+    float,
+    typer.Option(help="Seconds of travel, centred on each frame, whose overall direction is the Heading", min=0.01),
+]
+HeadingMinSpeed = Annotated[
+    float,
+    typer.Option(help="Km/h below which the Heading holds at the last moment the motorcycle was faster", min=0),
+]
 
 
 @app.command()
@@ -103,6 +111,8 @@ def render(
     max_speed: MaxSpeed = MAX_SPEED * KMH_PER_MS,
     max_gap: MaxGap = MAX_GAP,
     max_interpolated_gap: MaxInterpolatedGap = MAX_INTERPOLATED_GAP,
+    heading_window: HeadingWindow = HeadingSmoothing.window,
+    heading_min_speed: HeadingMinSpeed = HeadingSmoothing.min_speed * KMH_PER_MS,
     overview: Annotated[bool, typer.Option(help="Render overview.mov")] = True,
     minimap: Annotated[bool, typer.Option(help="Render minimap.mov")] = True,
 ) -> None:
@@ -116,7 +126,8 @@ def render(
     if not chosen:
         typer.echo("Error: --no-overview and --no-minimap leave nothing to render", err=True)
         raise typer.Exit(1)
-    render_ride = partial(_render, overlays=chosen, max_interpolated_gap=max_interpolated_gap)
+    heading = HeadingSmoothing(window=heading_window, min_speed=heading_min_speed / KMH_PER_MS)
+    render_ride = partial(_render, overlays=chosen, max_interpolated_gap=max_interpolated_gap, heading=heading)
     _each_ride(sources, out, max_speed / KMH_PER_MS, max_gap, render_ride)
 
 
@@ -208,9 +219,10 @@ def _render(
     inspected: Inspected,
     overlays: dict[str, Renderer],
     max_interpolated_gap: float,
+    heading: HeadingSmoothing,
 ) -> bool:
     """Render each Overlay, as `<name>.mov`, frame for frame with the Ride's footage, interpolating across Fix gaps
-    of up to `max_interpolated_gap` seconds; False if any couldn't be."""
+    of up to `max_interpolated_gap` seconds and smoothing the Heading by `heading`; False if any couldn't be."""
     ride = inspected.ride
     try:
         frames = read_frames(recording.chapters)
@@ -223,7 +235,7 @@ def _render(
                 typer.progressbar(range(frames.count), label=f"Rendering {path.name}", show_percent=True) as bar,
             ):
                 for frame in bar:
-                    writer.write(draw(ride.at(float(frame / frames.rate), max_interpolated_gap)))
+                    writer.write(draw(ride.at(float(frame / frames.rate), max_interpolated_gap, heading)))
             typer.echo(f"Wrote {path}")
     except VideoError as error:
         typer.echo(f"Error: {error}", err=True)

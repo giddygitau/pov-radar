@@ -1,4 +1,4 @@
-"""The Minimap Renderer: the Road network and Route around the Current position, north-up, in a circle."""
+"""The Minimap Renderer: the Road network and Route around the Current position, Heading-up, in a circle."""
 
 from collections.abc import Callable
 from typing import Any
@@ -6,7 +6,7 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
-from pov_radar.drawing import draw_dot, draw_route, path, pixels, skia, skia_colour, stroke
+from pov_radar.drawing import draw_route, fill, path, pixels, skia, skia_colour, stroke
 from pov_radar.ride import FrameState, Ride
 from pov_radar.roads import MINIMAP_REACH, RoadClass, RoadNetwork
 from pov_radar.style import Style
@@ -16,7 +16,7 @@ class Minimap:
     """The Minimap's size and scale for a Ride: the marker below centre, `MINIMAP_REACH` metres from the top edge."""
 
     def __init__(self, ride: Ride, frame_height: int, style: Style | None = None) -> None:
-        del ride  # Every Ride's Minimap is the same; the Ride will set its Heading.
+        del ride  # Every Ride's Minimap is the same size; its frame states give the Heading.
         self.style = style or Style()
         self.frame_height = frame_height
         self.width = self.height = round(self.style.minimap_diameter * frame_height)
@@ -27,9 +27,9 @@ class Minimap:
         """Pixels per metre."""
 
     def frames(self, roads: RoadNetwork) -> Callable[[FrameState], NDArray[np.uint8]]:
-        """A function drawing the Minimap at a frame state: the roads and the Route, Completed up to the Split point
-        and Upcoming after it, around a dot there, dimmed while held in a Fix gap; nothing at all while hidden.
-        Each road's path is built once, here."""
+        """A function drawing the Minimap at a frame state, turned so its Heading is up: the roads and the Route,
+        Completed up to the Split point and Upcoming after it, under an arrow there pointing up, dimmed while held in
+        a Fix gap; nothing at all while hidden. Each road's path is built once, here."""
         s, h, r = self.style, self.frame_height, self._radius
         surface = skia.Surface(self.width, self.height)
         circle = skia.Path().addCircle(r, r, r)
@@ -56,7 +56,8 @@ class Minimap:
             canvas.saveLayer()
             canvas.save()
             canvas.translate(*self._marker)
-            canvas.scale(self._scale, -self._scale)  # North up.
+            canvas.scale(self._scale, -self._scale)  # North up,
+            canvas.rotate(state.heading)  # then turned anticlockwise by the Heading, so it is up.
             canvas.translate(-here[0], -here[1])
             for near, paint in classes:
                 for road in near.around(here, MINIMAP_REACH):
@@ -74,10 +75,26 @@ class Minimap:
             canvas.restore()
             canvas.restore()
             canvas.drawCircle(r, r, r - s.ring_width * h / 2, stroke(s.ring, s.ring_width * h))
-            draw_dot(canvas, s, *self._marker, s.minimap_dot * h, s.minimap_dot_halo * h, state.visibility)
+            canvas.drawPath(arrow, shadow)
+            canvas.drawPath(arrow, held if state.visibility == "held_dimmed" else marker)
             return pixels(surface)
 
+        arrow = _arrow(*self._marker, s.minimap_arrow * h)
+        shadow = fill(s.marker_halo)
+        shadow.setMaskFilter(skia.MaskFilter.MakeBlur(skia.kNormal_BlurStyle, s.minimap_arrow_shadow * h))
+        marker, held = fill(s.marker), fill(s.marker_held)
         return draw
+
+
+def _arrow(x: float, y: float, size: float) -> Any:
+    """The marker: an arrowhead pointing up, centred on (x, y), its tip `size` above it."""
+    arrow = skia.Path()
+    arrow.moveTo(x, y - size)
+    arrow.lineTo(x + 0.72 * size, y + 0.75 * size)
+    arrow.lineTo(x, y + 0.38 * size)
+    arrow.lineTo(x - 0.72 * size, y + 0.75 * size)
+    arrow.close()
+    return arrow
 
 
 class _Roads:

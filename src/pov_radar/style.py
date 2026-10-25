@@ -51,7 +51,8 @@ class Style:
     """The marker held at the last valid position during a Fix gap too long to interpolate across: dimmed, so it
     reads as a lost Fix rather than as the motorcycle standing still."""
     marker_halo: Colour = (0, 0, 0, 160)
-    """The dark ring around the marker that keeps it visible over the bright Upcoming route."""
+    """The dark ring around the Overview's dot, and the shadow beneath the Minimap's arrow, that keep the marker
+    visible over the bright Upcoming route."""
     route_width: float = 0.0040
     """On the Minimap; the Overview scales it by `Style.overview_line_scale` and `Style.overview_route_scale`."""
 
@@ -64,10 +65,10 @@ class Style:
     """Fraction of the Minimap's radius beyond which the map fades out towards the edge."""
     minimap_glow_blur: float = 0.004
     """How far the Upcoming route's glow spreads on the Minimap."""
-    minimap_dot: float = 0.0095
-    """Radius of the Minimap's dot at the Current position."""
-    minimap_dot_halo: float = 0.015
-    """Radius of the dark halo around the Minimap's dot."""
+    minimap_arrow: float = 0.022
+    """How far the tip of the Minimap's arrow is above the Current position."""
+    minimap_arrow_shadow: float = 0.004
+    """How far the dark shadow beneath the Minimap's arrow spreads."""
 
     overview_height: float = 0.28
     """The Overview's height; its width follows the Route's shape."""
