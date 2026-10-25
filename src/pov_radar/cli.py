@@ -13,7 +13,9 @@ from pov_radar import maps
 from pov_radar.chapter import ChapterError, read_ride
 from pov_radar.recording import DiscoveryError, Recording, discover
 from pov_radar.ride import KMH_PER_MS, MAX_GAP, MAX_INTERPOLATED_GAP, MAX_SPEED, Ride, join
-from pov_radar.overview import Overview, write_png
+from pov_radar.drawing import write_png
+from pov_radar.minimap import Minimap
+from pov_radar.overview import Overview
 from pov_radar.roads import MINIMAP_REACH, MapData, RoadClass, RoadNetwork
 from pov_radar.video import OverlayWriter, VideoError, read_frames
 
@@ -90,6 +92,10 @@ def inspect(
     _each_ride(sources, out, max_speed / KMH_PER_MS, max_gap, lambda recording, folder, inspected: True)
 
 
+Renderer = Callable[[Ride, int], Overview | Minimap]
+"""An Overlay's Renderer, made for a Ride and the height of its footage's frames."""
+
+
 @app.command()
 def render(
     sources: Sources,
@@ -97,9 +103,20 @@ def render(
     max_speed: MaxSpeed = MAX_SPEED * KMH_PER_MS,
     max_gap: MaxGap = MAX_GAP,
     max_interpolated_gap: MaxInterpolatedGap = MAX_INTERPOLATED_GAP,
+    overview: Annotated[bool, typer.Option(help="Render overview.mov")] = True,
+    minimap: Annotated[bool, typer.Option(help="Render minimap.mov")] = True,
 ) -> None:
-    """Inspect each Ride, as `inspect` does, then render its Overview as overview.mov, a transparent Overlay."""
-    render_ride = partial(_render, max_interpolated_gap=max_interpolated_gap)
+    """Inspect each Ride, as `inspect` does, then render its Overlays, overview.mov and minimap.mov, as transparent
+    videos."""
+    chosen: dict[str, Renderer] = {}
+    if overview:
+        chosen["overview"] = Overview
+    if minimap:
+        chosen["minimap"] = Minimap
+    if not chosen:
+        typer.echo("Error: --no-overview and --no-minimap leave nothing to render", err=True)
+        raise typer.Exit(1)
+    render_ride = partial(_render, overlays=chosen, max_interpolated_gap=max_interpolated_gap)
     _each_ride(sources, out, max_speed / KMH_PER_MS, max_gap, render_ride)
 
 
@@ -185,25 +202,32 @@ def _inspect(
     return Inspected(ride=ride, roads=roads)
 
 
-def _render(recording: Recording, out: Path, inspected: Inspected, max_interpolated_gap: float) -> bool:
-    """Render the Overview Overlay frame for frame with the Ride's footage, interpolating across Fix gaps of up to
-    `max_interpolated_gap` seconds; False if it couldn't be."""
+def _render(
+    recording: Recording,
+    out: Path,
+    inspected: Inspected,
+    overlays: dict[str, Renderer],
+    max_interpolated_gap: float,
+) -> bool:
+    """Render each Overlay, as `<name>.mov`, frame for frame with the Ride's footage, interpolating across Fix gaps
+    of up to `max_interpolated_gap` seconds; False if any couldn't be."""
     ride = inspected.ride
-    path = out / "overview.mov"
     try:
         frames = read_frames(recording.chapters)
-        overview = Overview(ride, frames.height)
-        draw = overview.frames(inspected.roads)
-        with (
-            OverlayWriter(path, overview.width, overview.height, frames.rate) as writer,
-            typer.progressbar(range(frames.count), label=f"Rendering {path.name}", show_percent=True) as bar,
-        ):
-            for frame in bar:
-                writer.write(draw(ride.at(float(frame / frames.rate), max_interpolated_gap)))
+        for name, renderer in overlays.items():
+            path = out / f"{name}.mov"
+            overlay = renderer(ride, frames.height)
+            draw = overlay.frames(inspected.roads)
+            with (
+                OverlayWriter(path, overlay.width, overlay.height, frames.rate) as writer,
+                typer.progressbar(range(frames.count), label=f"Rendering {path.name}", show_percent=True) as bar,
+            ):
+                for frame in bar:
+                    writer.write(draw(ride.at(float(frame / frames.rate), max_interpolated_gap)))
+            typer.echo(f"Wrote {path}")
     except VideoError as error:
         typer.echo(f"Error: {error}", err=True)
         return False
-    typer.echo(f"Wrote {path}")
     return True
 
 

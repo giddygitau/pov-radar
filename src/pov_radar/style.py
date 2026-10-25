@@ -55,6 +55,20 @@ class Style:
     route_width: float = 0.0040
     """On the Minimap; the Overview scales it by `Style.overview_line_scale` and `Style.overview_route_scale`."""
 
+    minimap_diameter: float = 0.24
+    """The Minimap's diameter."""
+    minimap_bias: float = 0.22
+    """How far below the Minimap's centre the marker sits, as a fraction of its radius, so more of the map shows
+    ahead than behind; the top edge is `MINIMAP_REACH` from the marker."""
+    minimap_fade: float = 0.78
+    """Fraction of the Minimap's radius beyond which the map fades out towards the edge."""
+    minimap_glow_blur: float = 0.004
+    """How far the Upcoming route's glow spreads on the Minimap."""
+    minimap_dot: float = 0.0095
+    """Radius of the Minimap's dot at the Current position."""
+    minimap_dot_halo: float = 0.015
+    """Radius of the dark halo around the Minimap's dot."""
+
     overview_height: float = 0.28
     """The Overview's height; its width follows the Route's shape."""
     overview_aspect: tuple[float, float] = (0.7, 1.8)

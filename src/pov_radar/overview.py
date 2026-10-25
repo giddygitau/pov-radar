@@ -1,19 +1,15 @@
 """The Overview Renderer: the whole Route north-up over the Road network, in a rounded rectangle."""
 
 from collections.abc import Callable
-from importlib import import_module
-from pathlib import Path
 from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
 
+from pov_radar.drawing import draw_dot, draw_route, path, pixels, skia, skia_colour, stroke
 from pov_radar.ride import FrameState, Ride
 from pov_radar.roads import RoadNetwork
-from pov_radar.style import Colour, Style
-
-skia: Any = import_module("skia")
-"""skia-python ships no type information."""
+from pov_radar.style import Style
 
 MIN_EXTENT = 100.0
 """Metres the Overview shows at least, so a Ride that barely moves isn't magnified to nothing."""
@@ -55,7 +51,7 @@ class Overview:
         canvas = surface.getCanvas()
         self._draw_ground(canvas, roads)
         self._draw_route(canvas, self._drawn[:0], self._drawn)
-        return _pixels(surface)
+        return pixels(surface)
 
     def frames(self, roads: RoadNetwork) -> Callable[[FrameState], NDArray[np.uint8]]:
         """A function drawing the Overview at a frame state: the Route Completed up to the Split point and Upcoming
@@ -65,23 +61,19 @@ class Overview:
         self._draw_ground(surface.getCanvas(), roads)
         ground = surface.makeImageSnapshot()
         s, h = self.style, self.frame_height
-        halo = skia.Paint(Color=_colour(s.marker_halo), AntiAlias=True)
-        dot = skia.Paint(Color=_colour(s.marker), AntiAlias=True)
-        held = skia.Paint(Color=_colour(s.marker_held), AntiAlias=True)
 
         def draw(state: FrameState) -> NDArray[np.uint8]:
             canvas = surface.getCanvas()
             canvas.clear(skia.ColorTRANSPARENT)
             if state.visibility == "hidden":
-                return _pixels(surface)
+                return pixels(surface)
             canvas.drawImage(ground, 0, 0)
             split = int(np.searchsorted(self._kept, state.passed))
             here = self._pixels(np.array([state.metres]))
             self._draw_route(canvas, np.vstack([self._drawn[:split], here]), np.vstack([here, self._drawn[split:]]))
             ((x, y),) = here
-            canvas.drawCircle(x, y, s.overview_dot_halo * h, halo)
-            canvas.drawCircle(x, y, s.overview_dot * h, held if state.visibility == "held_dimmed" else dot)
-            return _pixels(surface)
+            draw_dot(canvas, s, x, y, s.overview_dot * h, s.overview_dot_halo * h, state.visibility)
+            return pixels(surface)
 
         return draw
 
@@ -91,27 +83,23 @@ class Overview:
         canvas.clear(skia.ColorTRANSPARENT)
         canvas.save()
         canvas.clipPath(self._shape, doAntiAlias=True)
-        canvas.drawColor(_colour(s.surface))
+        canvas.drawColor(skia_colour(s.surface))
         for road_class, road_style in s.roads.items():
             width = road_style.width * s.overview_line_scale * h
             lines = [self._pixels(road.points) for road in roads.roads if road.road_class == road_class]
             if road_class == "minor":
                 lines = self._thinned(lines, width)
-            canvas.drawPath(_path(lines), _stroke(road_style.colour, width))
+            canvas.drawPath(path(lines), stroke(road_style.colour, width))
         canvas.restore()
-        canvas.drawPath(self._shape, _stroke(s.ring, s.ring_width * h))
+        canvas.drawPath(self._shape, stroke(s.ring, s.ring_width * h))
 
     def _draw_route(self, canvas: Any, completed: NDArray[np.float64], upcoming: NDArray[np.float64]) -> None:
         """The Completed route muted, beneath the Upcoming route in the accent colour with its glow; in pixels."""
         s, h = self.style, self.frame_height
         width = s.route_width * s.overview_line_scale * s.overview_route_scale * h
-        glow = (*s.upcoming[:3], s.upcoming_glow_alpha)
-        ahead = _path([upcoming])
         canvas.save()
         canvas.clipPath(self._shape, doAntiAlias=True)
-        canvas.drawPath(_path([completed]), _stroke(s.completed, width))
-        canvas.drawPath(ahead, _stroke(glow, width * s.upcoming_glow_scale, blur=s.overview_glow_blur * h))
-        canvas.drawPath(ahead, _stroke(s.upcoming, width))
+        draw_route(canvas, s, [completed], [upcoming], width, s.overview_glow_blur * h)
         canvas.restore()
 
     def _thinned(self, lines: list[NDArray[np.float64]], width: float) -> list[NDArray[np.float64]]:
@@ -151,21 +139,6 @@ class Overview:
         return np.column_stack([self.width / 2 + offset[:, 0], self.height / 2 - offset[:, 1]])
 
 
-def write_png(image: NDArray[np.uint8], path: Path) -> None:
-    """Save (height, width, 4) straight-alpha RGBA as a PNG."""
-    skia.Image.fromarray(image, colorType=skia.kRGBA_8888_ColorType).save(str(path), skia.kPNG)
-
-
-def read_png(path: Path) -> NDArray[np.uint8]:
-    """A PNG as (height, width, 4) straight-alpha RGBA."""
-    return skia.Image.open(str(path)).toarray(colorType=skia.kRGBA_8888_ColorType, alphaType=skia.kUnpremul_AlphaType)
-
-
-def _pixels(surface: Any) -> NDArray[np.uint8]:
-    """A surface's contents as (height, width, 4) straight-alpha RGBA."""
-    return surface.toarray(colorType=skia.kRGBA_8888_ColorType, alphaType=skia.kUnpremul_AlphaType)
-
-
 def _simplified_line(points: NDArray[np.float64], detail: float) -> tuple[NDArray[np.float64], NDArray[np.int64]]:
     """The points of a line, keeping its ends and each point at least `detail` from the last one kept; and the
     indices of those kept."""
@@ -179,32 +152,3 @@ def _simplified_line(points: NDArray[np.float64], detail: float) -> tuple[NDArra
         kept.append(len(points) - 1)
     indices = np.array(kept, dtype=np.int64)
     return points[indices], indices
-
-
-def _path(lines: list[NDArray[np.float64]]) -> Any:
-    """One skia path through every line of pixel points."""
-    path = skia.Path()
-    for line in lines:
-        path.addPoly([skia.Point(float(x), float(y)) for x, y in line], False)
-    return path
-
-
-def _stroke(colour: Colour, width: float, blur: float = 0.0) -> Any:
-    """A round-capped line paint, `width` pixels wide, softened by a `blur` of that many pixels if given."""
-    paint = skia.Paint(
-        Color=_colour(colour),
-        AntiAlias=True,
-        Style=skia.Paint.kStroke_Style,
-        StrokeWidth=width,
-        StrokeCap=skia.Paint.kRound_Cap,
-        StrokeJoin=skia.Paint.kRound_Join,
-    )
-    if blur:
-        paint.setMaskFilter(skia.MaskFilter.MakeBlur(skia.kNormal_BlurStyle, blur))
-    return paint
-
-
-def _colour(colour: Colour) -> int:
-    """As skia's packed ARGB."""
-    red, green, blue, alpha = colour
-    return skia.ColorSetARGB(alpha, red, green, blue)

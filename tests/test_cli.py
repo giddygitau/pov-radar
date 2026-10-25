@@ -12,7 +12,7 @@ from typer.testing import CliRunner
 
 from pov_radar import cli, maps
 from pov_radar.cli import app
-from pov_radar.overview import read_png
+from pov_radar.drawing import read_png
 from pov_radar.ride import Ride, Sample
 from pov_radar.roads import MapData
 
@@ -465,13 +465,12 @@ def assert_is_an_overlay_matching(overlay: Path, source: Path) -> None:
     assert rendered["r_frame_rate"] == original["r_frame_rate"]
     assert rendered["frames"] == original["frames"]
     assert float(rendered["duration"]) == pytest.approx(float(original["duration"]), abs=0.001)
-    assert first_frame(overlay)[0, 0, 3] == 0, "outside the Overview's rounded corner is transparent"
+    assert first_frame(overlay)[0, 0, 3] == 0, "outside the Overlay's rounded edge is transparent"
 
 
-def test_render_writes_the_overview_as_a_transparent_overlay_frame_for_frame(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, map_cache: Path
-) -> None:
-    # Big enough for the Overview's rounded corners to be more than a pixel; a Sample at each end ~1.1 km apart.
+def rendering(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Footage big enough for the Overlays' rounded edges to be more than a pixel, its Ride a Sample at each end
+    ~1.1 km apart."""
     source = footage(tmp_path, "640x360")
     ride = chapter_ride(1.0, -0.7, -0.7)
     ride.samples[1].longitude = 36.91
@@ -480,22 +479,57 @@ def test_render_writes_the_overview_as_a_transparent_overlay_frame_for_frame(
         return ride
 
     monkeypatch.setattr(cli, "read_ride", read_ride)
+    return source
+
+
+def test_render_writes_both_overlays_transparent_and_frame_for_frame(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, map_cache: Path
+) -> None:
+    source = rendering(tmp_path, monkeypatch)
 
     result = runner.invoke(app, ["render", str(source)], input="n\n")
 
     assert result.exit_code == 0, result.output
-    overview = source.parent / "pov-radar" / "GX0001" / "overview.mov"
-    assert f"Wrote {overview}" in result.output
-    assert "Rendering overview.mov" in result.output
-    assert_is_an_overlay_matching(overview, source)
+    folder = source.parent / "pov-radar" / "GX0001"
+    for name in ("overview.mov", "minimap.mov"):
+        assert f"Wrote {folder / name}" in result.output
+        assert f"Rendering {name}" in result.output
+        assert_is_an_overlay_matching(folder / name, source)
+
+
+@pytest.mark.parametrize(("switch", "kept", "left_out"), [("--no-minimap", "overview", "minimap"), ("--no-overview", "minimap", "overview")])
+def test_either_overlay_can_be_switched_off_without_affecting_the_other(
+    switch: str, kept: str, left_out: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, map_cache: Path
+) -> None:
+    source = rendering(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["render", str(source), switch], input="n\n")
+
+    assert result.exit_code == 0, result.output
+    folder = source.parent / "pov-radar" / "GX0001"
+    assert_is_an_overlay_matching(folder / f"{kept}.mov", source)
+    assert not (folder / f"{left_out}.mov").exists()
+
+
+def test_render_with_both_overlays_switched_off_is_an_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, map_cache: Path
+) -> None:
+    source = rendering(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["render", str(source), "--no-overview", "--no-minimap"], input="n\n")
+
+    assert result.exit_code == 1
+    assert "nothing to render" in result.output
+    assert_wrote_nothing(source)
 
 
 @pytest.mark.skipif(not REFERENCE_CLIP.exists(), reason="reference clip is not in input/")
-def test_the_reference_clip_renders_an_overview_overlay(tmp_path: Path, map_cache: Path) -> None:
+def test_the_reference_clip_renders_both_overlays(tmp_path: Path, map_cache: Path) -> None:
     result = runner.invoke(app, ["render", str(REFERENCE_CLIP), "--out", str(tmp_path)], input="n\n")
 
     assert result.exit_code == 0, result.output
     assert_is_an_overlay_matching(tmp_path / "overview.mov", REFERENCE_CLIP)
+    assert_is_an_overlay_matching(tmp_path / "minimap.mov", REFERENCE_CLIP)
 
 
 def test_render_refuses_chapters_that_differ_in_frame_rate(
