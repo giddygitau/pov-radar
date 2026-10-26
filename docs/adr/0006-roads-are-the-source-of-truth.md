@@ -1,6 +1,6 @@
 # The Route follows the roads: Matching replaces "no snapping"
 
-Supersedes the no-snapping half of [ADR-0004](./0004-never-extrapolate-gps.md) and spec principle 3. The Route is now drawn from the Track after Matching: each valid Sample is placed onto the drawn road it plausibly lies on, and a Fix gap is filled along the road when only one road path fits it. Matching is on by default. On the KEFRI Ride the settled GoPro Track sat ~2.6 m off major roads but ~5 m off minor ones, and up to tens of metres off in the minutes after a cold-start Fix. The camera's precision value didn't flag either. A Route drifting beside the road it was obviously on looked wrong where the Road network already showed the truth.
+Supersedes the no-snapping half of [ADR-0004](./0004-never-extrapolate-gps.md) and spec principle 3. The Route is now drawn from the Track after Matching: each valid Sample is placed onto the drawn road it plausibly lies on, and a Fix gap is filled along the road when only one road path fits it. Matching is on by default. On a real test Ride the settled GoPro Track sat ~2.6 m off major roads but ~5 m off minor ones, and up to tens of metres off in the minutes after a cold-start Fix. The camera's precision value didn't flag either. A Route drifting beside the road it was obviously on looked wrong where the Road network already showed the truth.
 
 The rest of ADR-0004 stands: nothing is extrapolated, and where no road fits the Route keeps the recorded positions rather than inventing a road.
 
