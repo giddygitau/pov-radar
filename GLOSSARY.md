@@ -45,11 +45,11 @@ _Avoid_: Dropout, outage, missing data
 ## Route
 
 **Route**:
-The Ride's Track as drawn on the map, in recorded temporal order; a location visited twice appears twice.
+The Ride's Track as drawn on the map after Matching, in recorded temporal order; a location visited twice appears twice.
 _Avoid_: Path, line, trail
 
 **Current position**:
-Where the motorcycle is at a given instant on the Video timeline, interpolated between valid Samples but never extrapolated.
+Where the motorcycle is at a given instant on the Video timeline, interpolated along the Route between valid Samples, or along the road through a Fix gap that Matching filled; never extrapolated.
 _Avoid_: Location, marker position
 
 **Split point**:
@@ -71,6 +71,10 @@ _Avoid_: Bearing, course, orientation
 **Road network**:
 The real roads around the Route, taken from OpenStreetMap, drawn beneath it for context.
 _Avoid_: Basemap, tiles, background
+
+**Matching**:
+Placing the Track onto the Road network wherever a drawn road plausibly fits, including through Fix gaps where the road ridden is unambiguous; elsewhere the Route keeps the recorded positions.
+_Avoid_: Snapping, map-matching
 
 ## Output
 

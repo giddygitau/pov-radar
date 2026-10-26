@@ -10,7 +10,7 @@ Turn a GoPro HERO10 Black Ride into two transparent Overlays — a rotating Mini
 
 1. **Real roads.** The Road network comes from OpenStreetMap ([ADR-0002](./adr/0002-local-osm-extract.md)).
 2. **Temporal Route split.** Completed vs Upcoming is decided by the Track's time order at the interpolated Split point, never by geography. Out-and-back rides and loops must render correctly.
-3. **No invented GPS.** No extrapolation, no snapping ([ADR-0004](./adr/0004-never-extrapolate-gps.md)).
+3. **No invented GPS.** No extrapolation ([ADR-0004](./adr/0004-never-extrapolate-gps.md)). The Route follows the roads through Matching; where no drawn road plausibly fits, it keeps the recorded positions ([ADR-0006](./adr/0006-roads-are-the-source-of-truth.md)).
 4. **Video timeline is the master clock.** Use presentation timestamps, not frame-number arithmetic.
 5. **Independent Overlays.** Each can be re-rendered, restyled, or omitted without touching the other. Both use the same Current position at every instant.
 6. **Source footage is never modified.**
@@ -27,8 +27,9 @@ Turn a GoPro HERO10 Black Ride into two transparent Overlays — a rotating Mini
 ## Telemetry
 
 - Extract with an established tool/library (exiftool is verified to read the reference clip); reconstruct per-Sample time by distributing each payload's Samples across its MP4 sample duration on the Video timeline.
-- Validate: invalid/zero coordinates, no-Fix Samples, duplicate or non-monotonic times, Fix gaps, implausible jumps (speed-based), outliers that would distort Overview framing.
+- Validate: invalid/zero coordinates, no-Fix Samples, duplicate or non-monotonic times, Fix gaps, implausible jumps (speed-based, 320 km/h by default so fast riding is never rejected), outliers that would distort Overview framing.
 - Report affected time ranges; continue with valid portions. Fail clearly if there are no valid Samples.
+- Report when the first Fix arrived. When it came over a minute into the Ride, suggest switching the camera on a few minutes early with a clear view of the sky.
 - Optional explicit time offset (config/CLI), recorded in run metadata.
 
 ## Route model
@@ -46,10 +47,20 @@ The single source of truth for both Overlays; contains no styling.
 
 | Situation | Behaviour |
 |---|---|
-| Before first Fix | Both Overlays fully transparent |
-| Gap ≤ 3 s (configurable) | Interpolate |
-| Gap > 3 s | Hold marker at last valid position, dimmed; Minimap frozen |
+| Before first Fix | Overview shows the whole Route as Upcoming, with no dot; Minimap fully transparent |
+| Gap ≤ 3 s (configurable) | Interpolate along the Route |
+| Gap > 3 s, filled by Matching | Marker moves along the road at the gap's average speed; the Route through the gap is drawn like the rest |
+| Gap > 3 s, not filled | Hold marker at last valid position, dimmed; Minimap frozen |
 | After last Fix | Hold marker at final position |
+
+### Matching
+
+The Route follows the roads ([ADR-0006](./adr/0006-roads-are-the-source-of-truth.md)). On by default; configurable.
+
+- Each valid Sample is placed on the drawn road (major, mid or minor class) it plausibly lies on, taking the Track's continuity into account so a parallel road nearby isn't chosen. A Sample with no plausible road within the fallback distance (30 m by default, configurable) keeps its recorded position.
+- A Fix gap is filled along the road only when the road path between the Samples either side is unambiguous: both ends match connected roads, the path is ridable in the gap's time within `max_speed`, and no other path is nearly as short. Otherwise the gap policy applies unchanged.
+- Matched and recorded stretches look identical on the Overlays. `telemetry.json` keeps every Sample's recorded position plus its matched one, and marks filled gaps; `route.geojson` carries the matched Route and the recorded Track.
+- Temporal order is untouched: Matching moves positions, never times, so the Split point still splits by time.
 
 ### Heading
 
@@ -87,7 +98,8 @@ Style: Forza Horizon-like. Near-black translucent surface, grey roads, Upcoming 
 
 - Default folder: `pov-radar/GX<recording>/` next to the source; override with `--out`. Config file `config.yaml` in the working directory, or `--config`. Precedence: CLI > config file > built-in defaults. Effective config is logged.
 - `minimap.mov`, `overview.mov`: ProRes 4444 with alpha (`yuva444p10le`), cropped to the map size ([ADR-0003](./adr/0003-cropped-overlays.md)); `--full-frame` optional. Alpha is verified after encoding. A sidecar records each Overlay's placement. One file per Overlay per Ride, spanning all Chapters; frame rate matches source.
-- `final.mp4` (optional Composite): chapters joined, Overlays placed per sidecar, `libx265 -preset slow -crf 16`, 10-bit `yuv420p10le`, BT.709 tags, **source full-range flag preserved**, audio stream-copied. `--fast` uses `-preset medium`. Encoder settings configurable.
+- `final.mp4` (optional Composite): chapters joined, Overlays placed per sidecar, `libx265 -preset slow -crf 16`, 10-bit `yuv420p10le`, BT.709 tags, **source full-range flag preserved**, audio stream-copied. `--fast` uses the Mac's hardware HEVC encoder (`hevc_videotoolbox`) at a configurable quality, keeping 10-bit and the colour tags. Encoder settings and thread count configurable.
+- The README explains building the Composite by hand in DaVinci Resolve from `--full-frame` Overlays stacked at the origin.
 - Frames are streamed to the encoder; no full-frame PNG sequences kept unless diagnostics are requested.
 
 ## CLI
@@ -115,4 +127,4 @@ Python 3.12, uv, Typer, pydantic, pyproj, pyosmium, NumPy, Shapely, skia-python,
 4. Minimap (Heading, rotation, follow).
 5. Transparent Overlay export and Composite.
 
-Later: caching beyond telemetry, diagnostics mode, multi-Recording Rides, adaptive zoom, map matching, speed/altitude readouts, themes, parallel rendering.
+Later: caching beyond telemetry, diagnostics mode, multi-Recording Rides, adaptive zoom, speed/altitude readouts, themes, parallel rendering, a smaller Overlay codec than ProRes 4444, GPS from a phone or external receiver.
