@@ -69,7 +69,7 @@ The motorcycle's direction of travel, derived from movement since the camera doe
 _Avoid_: Bearing, course, orientation
 
 **Road network**:
-The real roads around the Route, taken from OpenStreetMap, drawn beneath it for context.
+The real roads around the Route, taken from OpenStreetMap, drawn beneath it for context on the Minimap, and on the Overview only when it is drawn as a map.
 _Avoid_: Basemap, tiles, background
 
 **Matching**:

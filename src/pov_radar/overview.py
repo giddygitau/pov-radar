@@ -1,4 +1,4 @@
-"""The Overview Renderer: the whole Route north-up over the Road network, in a rounded rectangle."""
+"""The Overview Renderer: the whole Route north-up, on its own or over the Road network in a rounded rectangle."""
 
 from collections.abc import Callable
 from typing import Any
@@ -10,7 +10,7 @@ from pov_radar.drawing import draw_dot, draw_route, fill, path, pixels, skia, sk
 from pov_radar.ride import FrameState, Ride
 from pov_radar.maps import CREDIT
 from pov_radar.roads import RoadNetwork
-from pov_radar.style import Style
+from pov_radar.style import Look, Style
 
 MIN_EXTENT = 100.0
 """Metres the Overview shows at least, so a Ride that barely moves isn't magnified to nothing."""
@@ -27,10 +27,13 @@ class Overview:
     """The Overview's fixed framing for a Ride: fitted to its valid Samples, so rejected ones never move it; with the
     OpenStreetMap credit burnt in along its bottom edge if `credit`."""
 
-    def __init__(self, ride: Ride, frame_height: int, style: Style | None = None, credit: bool = False) -> None:
+    def __init__(
+        self, ride: Ride, frame_height: int, style: Style | None = None, credit: bool = False, look: Look = "route"
+    ) -> None:
         self.style = style or Style()
         self.frame_height = frame_height
         self.credit = credit
+        self.look: Look = look
         valid = ride.valid_samples
         self._route = ride.projection.to_metres([s.longitude for s in valid], [s.latitude for s in valid])
 
@@ -43,8 +46,10 @@ class Overview:
         self._scale = min(self.width / span_x, self.height / span_y)
         """Pixels per metre."""
         self._centre = np.array([(west + east) / 2, (south + north) / 2])
-        self.reach = max(self.width / self._scale - (east - west), self.height / self._scale - (north - south)) / 2
-        """Metres the Overview shows beyond the box around the Route, where it needs roads."""
+        shown = max(self.width / self._scale - (east - west), self.height / self._scale - (north - south)) / 2
+        self.reach = shown if look == "map" else 0.0
+        """Metres beyond the box around the Route that the Overview needs roads for: as far as it shows, in the
+        `map` look; none in the `route` look, which draws no roads."""
         self._drawn, self._kept = _simplified_line(self._pixels(self._route), ROUTE_DETAIL)
         """The Route's line in pixels, and the index among the valid Samples of each of its points."""
         corner = self.style.overview_corner * self.height
@@ -84,9 +89,19 @@ class Overview:
         return draw
 
     def _draw_ground(self, canvas: Any, roads: RoadNetwork) -> None:
-        """The surface, roads, outline and any credit, on a cleared canvas."""
-        s, h = self.style, self.frame_height
+        """Everything beneath the Route, on a cleared canvas: its backdrop in the `map` look, its dark casing in the
+        `route` look; and any credit."""
         canvas.clear(skia.ColorTRANSPARENT)
+        if self.look == "map":
+            self._draw_backdrop(canvas, roads)
+        else:
+            self._draw_casing(canvas)
+        if self.credit:
+            self._draw_credit(canvas)
+
+    def _draw_backdrop(self, canvas: Any, roads: RoadNetwork) -> None:
+        """The surface, roads and outline of the `map` look."""
+        s, h = self.style, self.frame_height
         canvas.save()
         canvas.clipPath(self._shape, doAntiAlias=True)
         canvas.drawColor(skia_colour(s.surface))
@@ -98,24 +113,38 @@ class Overview:
             canvas.drawPath(path(lines), stroke(road_style.colour, width))
         canvas.restore()
         canvas.drawPath(self._shape, stroke(s.ring, s.ring_width * h))
-        if self.credit:
-            gap = s.overview_credit_size * h
-            inset = max(gap, s.overview_corner * self.height / 2)  # Clear of the rounded corner.
-            font = skia.Font(skia.Typeface(s.overview_credit_typeface), gap / CAP_HEIGHT)
-            room = self.width - 2 * inset
-            if font.measureText(CREDIT) > room:
-                font.setSize(font.getSize() * room / font.measureText(CREDIT))
-            x = self.width - inset - font.measureText(CREDIT)
-            canvas.drawString(CREDIT, x, self.height - gap, font, fill(s.overview_credit))
+
+    def _draw_casing(self, canvas: Any) -> None:
+        """The dark casing beneath the whole Route, of the `route` look."""
+        s = self.style
+        canvas.drawPath(path([self._drawn]), stroke(s.marker_halo, self._route_width() * s.overview_casing_scale))
+
+    def _draw_credit(self, canvas: Any) -> None:
+        """The OpenStreetMap credit along the bottom edge, right-aligned."""
+        s, h = self.style, self.frame_height
+        gap = s.overview_credit_size * h
+        inset = max(gap, s.overview_corner * self.height / 2)  # Clear of the rounded corner.
+        font = skia.Font(skia.Typeface(s.overview_credit_typeface), gap / CAP_HEIGHT)
+        room = self.width - 2 * inset
+        if font.measureText(CREDIT) > room:
+            font.setSize(font.getSize() * room / font.measureText(CREDIT))
+        x = self.width - inset - font.measureText(CREDIT)
+        canvas.drawString(CREDIT, x, self.height - gap, font, fill(s.overview_credit))
 
     def _draw_route(self, canvas: Any, completed: NDArray[np.float64], upcoming: NDArray[np.float64]) -> None:
-        """The Completed route muted, beneath the Upcoming route in the accent colour with its glow; in pixels."""
+        """The Completed route muted, beneath the Upcoming route in the accent colour with its glow; in pixels, and
+        within the rounded rectangle in the `map` look."""
         s, h = self.style, self.frame_height
-        width = s.route_width * s.overview_line_scale * s.overview_route_scale * h
         canvas.save()
-        canvas.clipPath(self._shape, doAntiAlias=True)
-        draw_route(canvas, s, [completed], [upcoming], width, s.overview_glow_blur * h)
+        if self.look == "map":
+            canvas.clipPath(self._shape, doAntiAlias=True)
+        draw_route(canvas, s, [completed], [upcoming], self._route_width(), s.overview_glow_blur * h)
         canvas.restore()
+
+    def _route_width(self) -> float:
+        """The Route's line width, in pixels."""
+        s = self.style
+        return s.route_width * s.overview_line_scale * s.overview_route_scale * self.frame_height
 
     def _thinned(self, lines: list[NDArray[np.float64]], width: float) -> list[NDArray[np.float64]]:
         """The longest of `lines`, in pixels `width` wide, kept until each patch of the Overview is as covered as

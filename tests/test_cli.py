@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 import typer
 import yaml
+from numpy.typing import NDArray
 from typer.testing import CliRunner
 
 from pov_radar import cli, maps
@@ -328,8 +329,29 @@ def test_inspect_draws_a_preview_of_the_overview_at_4k_proportions(
     image = read_png(preview)
     # 28% of 2160 high; a Ride due east is as wide as the Overview may be, 1.8 times its height.
     assert image.shape == (605, 1089, 4)
-    road_grey = (image[:, :, 0] > 40) & (np.abs(image[:, :, 0].astype(int) - image[:, :, 2]) < 30)
-    assert road_grey.any(), "the fixture's roads are drawn"
+    assert not _road_grey(image).any(), "drawn in the route look: no roads"
+    assert (image[:, :, 1] > 200).any(), "but the Route is"
+
+
+def test_inspect_draws_the_preview_as_a_map_in_the_map_look(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, map_cache: Path
+) -> None:
+    source = ride_on_the_fixture_roads(tmp_path, monkeypatch)
+    assert runner.invoke(app, ["maps", "update"]).exit_code == 0
+    config = tmp_path / "config.yaml"
+    config.write_text("overview:\n  look: map\n")
+
+    code, output = inspect(source, "--config", str(config))
+
+    assert code == 0, output
+    image = read_png(source.parent / "pov-radar" / "GX0001" / "preview.png")
+    assert image.shape == (605, 1089, 4), "framed as in the route look"
+    assert _road_grey(image).any(), "the fixture's roads are drawn"
+
+
+def _road_grey(image: NDArray[np.uint8]) -> NDArray[np.bool_]:
+    """Where a road's grey, or the surface's, shows: not the Route's cyan, nor its casing's transparent black."""
+    return (image[:, :, 3] > 0) & (image[:, :, 0] > 40) & (np.abs(image[:, :, 0].astype(int) - image[:, :, 2]) < 30)
 
 
 def test_a_missing_extract_is_offered_for_download_and_declining_skips_the_roads(

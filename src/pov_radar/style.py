@@ -4,7 +4,7 @@ Sizes are fractions of the video frame's height, so one Style suits 1080p, 2.7K 
 """
 
 import re
-from typing import Annotated, Self
+from typing import Annotated, Literal, Self
 
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, PlainSerializer, model_validator
@@ -37,6 +37,10 @@ Size = Annotated[float, Field(gt=0)]
 
 Proportion = Annotated[float, Field(ge=0, le=1)]
 """A fraction from 0 to 1 of something named beside it."""
+
+Look = Literal["route", "map"]
+"""How the Overview is drawn: `route`, just the Route and its dot over the footage; `map`, over the Road network on
+a dark surface in a rounded rectangle."""
 
 
 class RoadStyle(BaseModel, frozen=True, extra="forbid"):
@@ -110,6 +114,9 @@ class Style(BaseModel):
     """Overview road and route widths relative to the Minimap's."""
     overview_route_scale: Size = 1.2
     """Extra width for the Route on the Overview, so it stands out from the thinner roads."""
+    overview_casing_scale: Size = 2.2
+    """Width of the dark casing, in `marker_halo`'s colour, beneath the Route in the Overview's `route` look,
+    relative to the Route's; it keeps both the Completed and Upcoming routes visible over bright footage."""
     overview_glow_blur: Size = 0.003
     """How far the Upcoming route's glow spreads on the Overview."""
     overview_dot: Size = 0.0075

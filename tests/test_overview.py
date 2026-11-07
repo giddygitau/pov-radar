@@ -1,3 +1,5 @@
+from collections.abc import Callable
+
 import numpy as np
 import pytest
 from numpy.typing import NDArray
@@ -18,7 +20,7 @@ SQUARE_ROADS: list[tuple[RoadClass, list[tuple[float, float]]]] = [
 
 
 def test_a_square_route_is_drawn_over_its_roads_north_up(request: pytest.FixtureRequest) -> None:
-    image = Overview(SQUARE, FRAME_HEIGHT).render(roads(SQUARE, SQUARE_ROADS))
+    image = Overview(SQUARE, FRAME_HEIGHT, look="map").render(roads(SQUARE, SQUARE_ROADS))
 
     height, width, _ = image.shape
     assert height == 302, "28% of 1080"
@@ -30,7 +32,7 @@ def test_a_square_route_is_drawn_over_its_roads_north_up(request: pytest.Fixture
 def test_a_long_thin_route_widens_the_overview_as_far_as_allowed_without_distortion(request: pytest.FixtureRequest) -> None:
     # 12 km east by 1 km north: wider than the widest Overview, so it fits the width and is centred vertically.
     thin = ride(along((0, 0), (6, 1), 60) + along((6, 1), (12, 0), 60)[1:])
-    image = Overview(thin, FRAME_HEIGHT).render(roads(thin, [("major", [(-1.0, 0.0), (13.0, 0.0)])]))
+    image = Overview(thin, FRAME_HEIGHT, look="map").render(roads(thin, [("major", [(-1.0, 0.0), (13.0, 0.0)])]))
 
     height, width, _ = image.shape
     assert (height, width) == (302, 544), "1.8 times as wide as high"
@@ -43,7 +45,7 @@ def test_a_long_thin_route_widens_the_overview_as_far_as_allowed_without_distort
 def test_a_loop_is_drawn_whole(request: pytest.FixtureRequest) -> None:
     angles = np.linspace(0, 2 * np.pi, 120)
     loop = ride([(float(1.5 * np.sin(a)), float(1.0 - np.cos(a))) for a in angles])
-    image = Overview(loop, FRAME_HEIGHT).render(
+    image = Overview(loop, FRAME_HEIGHT, look="map").render(
         roads(loop, [("mid", [(-2.0, 0.0), (2.0, 0.0)]), ("minor", [(0.0, -1.0), (0.0, 3.0)])])
     )
 
@@ -56,7 +58,7 @@ def test_a_rejected_far_off_sample_does_not_change_the_framing(request: pytest.F
     with_outlier = join([Ride(duration=SQUARE.duration, samples=[s.model_copy() for s in samples])])
     assert [issue.kind for issue in with_outlier.issues] == ["implausible_jump"]
 
-    image = Overview(with_outlier, FRAME_HEIGHT).render(roads(with_outlier, SQUARE_ROADS))
+    image = Overview(with_outlier, FRAME_HEIGHT, look="map").render(roads(with_outlier, SQUARE_ROADS))
 
     assert_matches_golden(image, "square", request)
 
@@ -69,7 +71,7 @@ def test_dense_minor_roads_are_thinned_but_sparse_ones_kept(request: pytest.Fixt
         *(("minor", [(0.0, 2 * y), (1.0, 2 * y)]) for y in grid),
         ("minor", [(1.5, 0.2), (1.5, 1.8)]),
     ]
-    image = Overview(SQUARE, FRAME_HEIGHT).render(roads(SQUARE, lines))
+    image = Overview(SQUARE, FRAME_HEIGHT, look="map").render(roads(SQUARE, lines))
 
     road = image[:, :, 0] > 40  # Any road is far brighter than the near-black surface.
     rows = _square_pixels(image.shape[0], 0.1, 1.9)  # Symmetric, so north–south order is moot.
@@ -95,7 +97,7 @@ def test_a_white_dot_marks_the_current_position(
     name: str, time: float, at_km: tuple[float, float], request: pytest.FixtureRequest
 ) -> None:
     # The square's Samples are 0.1 km and 2 s apart: 40 s is its south-east corner and 51 s lies between two Samples 0.55 km north of it.
-    draw = Overview(SQUARE, FRAME_HEIGHT).frames(roads(SQUARE, SQUARE_ROADS))
+    draw = Overview(SQUARE, FRAME_HEIGHT, look="map").frames(roads(SQUARE, SQUARE_ROADS))
 
     image = draw(SQUARE.at(time))
 
@@ -141,7 +143,7 @@ UPCOMING, COMPLETED = (True, False), (False, True)
 def test_the_route_is_completed_up_to_the_dot_and_upcoming_after_it_by_time(
     name: str, time: float, expected: dict[tuple[float, float], tuple[bool, bool]], request: pytest.FixtureRequest
 ) -> None:
-    draw = Overview(CROSSING, FRAME_HEIGHT).frames(RoadNetwork([]))
+    draw = Overview(CROSSING, FRAME_HEIGHT, look="map").frames(RoadNetwork([]))
 
     image = draw(CROSSING.at(time))
 
@@ -151,7 +153,7 @@ def test_the_route_is_completed_up_to_the_dot_and_upcoming_after_it_by_time(
 
 def test_before_the_first_fix_the_overview_is_fully_transparent() -> None:
     late = Ride(duration=SQUARE.duration, samples=SQUARE.samples[2:])
-    overview = Overview(late, FRAME_HEIGHT)
+    overview = Overview(late, FRAME_HEIGHT, look="map")
     draw = overview.frames(roads(late, SQUARE_ROADS))
 
     image = draw(late.at(2.0))
@@ -163,7 +165,7 @@ def test_before_the_first_fix_the_overview_is_fully_transparent() -> None:
 def test_during_a_long_fix_gap_the_dot_holds_dimmed_at_the_last_position(request: pytest.FixtureRequest) -> None:
     # No valid Sample between the south-east corner at 40 s and the next at 46 s.
     gap = Ride(duration=SQUARE.duration, samples=[s for s in SQUARE.samples if s.time not in (42.0, 44.0)])
-    draw = Overview(gap, FRAME_HEIGHT).frames(roads(gap, SQUARE_ROADS))
+    draw = Overview(gap, FRAME_HEIGHT, look="map").frames(roads(gap, SQUARE_ROADS))
 
     live, held = draw(gap.at(40.0)), draw(gap.at(43.0))
 
@@ -177,9 +179,9 @@ def test_during_a_long_fix_gap_the_dot_holds_dimmed_at_the_last_position(request
 
 def test_the_openstreetmap_credit_can_be_burnt_in_along_the_bottom(request: pytest.FixtureRequest) -> None:
     network = roads(SQUARE, SQUARE_ROADS)
-    plain = Overview(SQUARE, FRAME_HEIGHT).render(network)
+    plain = Overview(SQUARE, FRAME_HEIGHT, look="map").render(network)
 
-    credited = Overview(SQUARE, FRAME_HEIGHT, credit=True).render(network)
+    credited = Overview(SQUARE, FRAME_HEIGHT, credit=True, look="map").render(network)
 
     changed = np.argwhere(np.abs(credited.astype(int) - plain.astype(int)).max(axis=2) > 40)
     (top, left), (bottom, right) = changed.min(axis=0), changed.max(axis=0)
@@ -188,3 +190,49 @@ def test_the_openstreetmap_credit_can_be_burnt_in_along_the_bottom(request: pyte
     assert width / 3 < left and right < width - 8, "in the bottom-right corner, inside the rounded edge"
     assert np.array_equal(credited[: height - 30], plain[: height - 30]), "nothing else changes"
     assert_matches_golden(credited, "credit", request)
+
+
+def test_the_route_look_draws_only_the_route_and_the_dot_over_nothing(request: pytest.FixtureRequest) -> None:
+    network = roads(SQUARE, SQUARE_ROADS)
+    route, as_map = Overview(SQUARE, FRAME_HEIGHT, look="route"), Overview(SQUARE, FRAME_HEIGHT, look="map")
+    image = route.render(network)
+
+    assert image.shape == as_map.render(network).shape, "framed as the map look is"
+    assert route.reach == 0 < as_map.reach, "it needs no roads beyond the Route"
+    inside = image[_square_pixels(image.shape[0], 0.2, 1.8), _square_pixels(image.shape[1], 0.2, 1.8)]
+    assert not inside[:, :, 3].any(), "no roads or surface inside the square, only transparency"
+    assert image[0, 0, 3] == 0 and image[image.shape[0] // 2, 0, 3] == 0, "no surface in the padding either"
+    assert colours_at(image, 1.0, 0.0) == UPCOMING, "the Route is drawn"
+    assert_matches_golden(image, "route-square", request)
+
+
+@pytest.mark.parametrize(("time", "colour"), [(0.0, is_upcoming), (120.0, is_completed)])
+def test_the_route_look_lays_the_route_on_a_dark_casing_so_it_reads_over_bright_footage(
+    time: float, colour: Callable[[NDArray[np.uint8]], bool]
+) -> None:
+    image = Overview(SQUARE, FRAME_HEIGHT, look="route").frames(RoadNetwork([]))(SQUARE.at(time))
+
+    over_white = image[:, :, :3] * (image[:, :, 3:] / 255) + 255 * (1 - image[:, :, 3:] / 255)
+    row = _square_pixels(image.shape[0], 2.0, 2.0).start  # The square's south side, which is Completed by 120 s.
+    column = _square_pixels(image.shape[1], 1.0, 1.0).start
+    assert colour(image[row, column]), "the route is here"
+    beside = over_white[row - 6 : row + 7, column].mean(axis=1)
+    assert beside.min() < 128, "darker than the Completed route's own grey, beside the line"
+
+
+def test_the_route_look_splits_the_route_at_the_dot(request: pytest.FixtureRequest) -> None:
+    image = Overview(CROSSING, FRAME_HEIGHT, look="route").frames(RoadNetwork([]))(CROSSING.at(120.0))
+
+    expected = {(0.5, 0.5): COMPLETED, (1.0, 0.2): UPCOMING}
+    assert {point: colours_at(image, *point) for point in expected} == expected
+    assert_matches_golden(image, "route-split-crossing", request)
+
+
+def test_the_route_look_dims_the_dot_in_a_fix_gap(request: pytest.FixtureRequest) -> None:
+    gap = Ride(duration=SQUARE.duration, samples=[s for s in SQUARE.samples if s.time not in (42.0, 44.0)])
+    held = Overview(gap, FRAME_HEIGHT, look="route").frames(roads(gap, SQUARE_ROADS))(gap.at(43.0))
+
+    row = _square_pixels(held.shape[0], 2.0, 2.0).start
+    column = _square_pixels(held.shape[1], 2.0, 2.0).start
+    assert held[row, column, :3].max() < 200, "dimmed at the corner during the gap"
+    assert_matches_golden(held, "route-dot-held-dimmed", request)

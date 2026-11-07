@@ -19,6 +19,7 @@ def test_with_no_file_and_no_options_the_built_in_defaults_apply(tmp_path: Path,
     assert config == Config()
     assert config.minimap.corner == "bottom-right" and config.overview.corner == "top-left"
     assert config.minimap.margin == config.overview.margin == 0.03
+    assert config.overview.look == "route", "just the Route and its dot"
     assert config.style.upcoming == (0x00, 0xE5, 0xFF, 255)
     assert config.attribution == "file" and not config.full_frame
     assert str(config.composite.encoding()) == "libx265 -preset slow -crf 16, yuv420p10le"
@@ -85,6 +86,7 @@ def test_an_empty_file_is_the_defaults(tmp_path: Path) -> None:
         ("style:\n  upcoming: [0, 300, 0, 255]\n", "style.upcoming"),
         ("minimap:\n  margin: -0.01\n", "minimap.margin"),
         ("minimap:\n  corner: middle\n", "minimap.corner"),
+        ("overview:\n  look: satellite\n", "overview.look"),
         ("style:\n  minimap_diameter: 0\n", "style.minimap_diameter"),
         ("style:\n  overview_aspect: [1.8, 0.7]\n", "narrowest"),
         ("heading:\n  window: fast\n", "heading.window"),
@@ -104,6 +106,10 @@ def test_a_bad_value_is_an_error_naming_the_file_and_the_setting(tmp_path: Path,
 
     assert str(path) in str(raised.value)
     assert complaint in str(raised.value)
+
+
+def test_the_overview_can_be_drawn_as_a_map(tmp_path: Path) -> None:
+    assert load_config(written(tmp_path, "overview:\n  look: map\n")).overview.look == "map"
 
 
 def test_a_bad_option_is_an_error_naming_the_option() -> None:

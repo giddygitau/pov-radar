@@ -71,7 +71,7 @@ The Route follows the roads ([ADR-0006](./adr/0006-roads-are-the-source-of-truth
 
 - Geofabrik `africa/kenya` `.osm.pbf`, in `~/.cache/pov-radar/osm/`. First run offers to download it if missing; `pov-radar maps update` refreshes it. Extract date recorded in run metadata.
 - Clip to the Ride's bounding box plus the Minimap's visible radius as margin.
-- Road classes: motorway/trunk/primary brightest; secondary/tertiary subdued; residential/unclassified/`track` faintest but visible; footways, cycleways, paths and service roads hidden. The Overview additionally thins minor classes in dense areas.
+- Road classes: motorway/trunk/primary brightest; secondary/tertiary subdued; residential/unclassified/`track` faintest but visible; footways, cycleways, paths and service roads hidden. The Overview, when drawn as a map, additionally thins minor classes in dense areas.
 - No labels in v1.
 - Write `ATTRIBUTION.txt` ("© OpenStreetMap contributors") beside outputs and print a reminder; `attribution: burn_in` optionally renders it.
 
@@ -86,13 +86,14 @@ Sizes are proportional to frame height so one config works at 1080p, 2.7K, and 4
 | | Minimap | Overview |
 |---|---|---|
 | Position | bottom-right, 3% margin | top-left, 3% margin |
-| Shape | circle | rounded rectangle |
+| Look | map | `route`: just the Route and dot (configurable: `map`, over the Road network) |
+| Shape | circle | none; a rounded rectangle in the `map` look |
 | Size | 24% of frame height diameter | 28% of frame height, aspect fitted to the Route |
 | Orientation | Heading-up | north-up, fixed extent for the whole Ride |
 | View | ~250 m ahead of marker, slight forward bias | whole valid Route with padding |
 | Marker | white arrow | white dot |
 
-Style: Forza Horizon-like. Near-black translucent surface, grey roads, Upcoming route electric cyan `#00E5FF`, Completed route ~50% grey, marker always drawn on top.
+Style: Forza Horizon-like. Near-black translucent surface, grey roads, Upcoming route electric cyan `#00E5FF`, Completed route ~50% grey, marker always drawn on top. By default the Overview has no surface, roads or outline: the Route floats over the footage on a thin dark casing, so both its colours stay visible over bright sky.
 
 ## Output
 

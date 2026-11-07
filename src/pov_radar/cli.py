@@ -277,7 +277,7 @@ placement for it."""
 
 RENDERERS: dict[str, Renderer] = {
     "overview": lambda ride, height, config: (
-        Overview(ride, height, config.style, credit=config.attribution == "burn_in"),
+        Overview(ride, height, config.style, credit=config.attribution == "burn_in", look=config.overview.look),
         config.overview,
     ),
     "minimap": lambda ride, height, config: (Minimap(ride, height, config.style, config.minimap.reach), config.minimap),
@@ -343,7 +343,7 @@ def _inspect(
         typer.echo(f"Error: {recording.name} has no valid Samples; there is nothing to map", err=True)
         return None
 
-    overview = Overview(ride, PREVIEW_FRAME_HEIGHT, config.style)
+    overview = Overview(ride, PREVIEW_FRAME_HEIGHT, config.style, look=config.overview.look)
     record = None
     roads = RoadNetwork([])
     if loaded := map_data():

@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from pov_radar.placement import Corner
 from pov_radar.ride import KMH_PER_MS, MAX_GAP, MAX_INTERPOLATED_GAP, MAX_SPEED, HeadingSmoothing
 from pov_radar.roads import MINIMAP_REACH
-from pov_radar.style import Style
+from pov_radar.style import Look, Style
 from pov_radar.video import Encoding
 
 DEFAULT_PATH = Path("config.yaml")
@@ -70,9 +70,12 @@ class MinimapConfig(Placed):
 
 
 class OverviewConfig(Placed):
-    """Where the Overview sits on the frame."""
+    """Where the Overview sits on the frame, and how it's drawn."""
 
     corner: Corner = "top-left"
+    look: Look = "route"
+    """`route` draws just the Route and its dot over the footage; `map` draws them over the Road network on a dark
+    surface in a rounded rectangle."""
 
 
 class CompositeConfig(_Section):
