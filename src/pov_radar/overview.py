@@ -41,7 +41,8 @@ class Overview:
         padding = self.style.overview_padding * max(east - west, north - south, MIN_EXTENT)
         span_x, span_y = east - west + 2 * padding, north - south + 2 * padding
         narrowest, widest = self.style.overview_aspect
-        self.height = round(self.style.overview_height * frame_height)
+        height = self.style.overview_height if look == "map" else self.style.overview_route_height
+        self.height = round(height * frame_height)
         self.width = round(self.height * min(max(span_x / span_y, narrowest), widest))
         self._scale = min(self.width / span_x, self.height / span_y)
         """Pixels per metre."""

@@ -88,7 +88,7 @@ Sizes are proportional to frame height so one config works at 1080p, 2.7K, and 4
 | Position | bottom-right, 3% margin | top-left, 3% margin |
 | Look | map | `route`: just the Route and dot (configurable: `map`, over the Road network) |
 | Shape | circle | none; a rounded rectangle in the `map` look |
-| Size | 24% of frame height diameter | 28% of frame height, aspect fitted to the Route |
+| Size | 24% of frame height diameter | 20% of frame height (28% in the `map` look), aspect fitted to the Route |
 | Orientation | Heading-up | north-up, fixed extent for the whole Ride |
 | View | ~250 m ahead of marker, slight forward bias | whole valid Route with padding |
 | Marker | white arrow | white dot |

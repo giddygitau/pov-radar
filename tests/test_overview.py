@@ -197,7 +197,10 @@ def test_the_route_look_draws_only_the_route_and_the_dot_over_nothing(request: p
     route, as_map = Overview(SQUARE, FRAME_HEIGHT, look="route"), Overview(SQUARE, FRAME_HEIGHT, look="map")
     image = route.render(network)
 
-    assert image.shape == as_map.render(network).shape, "framed as the map look is"
+    map_height, map_width, _ = as_map.render(network).shape
+    height, width, _ = image.shape
+    assert height == 216, "20% of 1080, smaller than the map look's 28%, as the Route floats on its own"
+    assert width / height == pytest.approx(map_width / map_height, abs=0.01), "the same shape as the map look"
     assert route.reach == 0 < as_map.reach, "it needs no roads beyond the Route"
     inside = image[_square_pixels(image.shape[0], 0.2, 1.8), _square_pixels(image.shape[1], 0.2, 1.8)]
     assert not inside[:, :, 3].any(), "no roads or surface inside the square, only transparency"

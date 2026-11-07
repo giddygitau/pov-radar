@@ -103,7 +103,10 @@ class Style(BaseModel):
     """How far the dark shadow beneath the Minimap's arrow spreads."""
 
     overview_height: Size = 0.28
-    """The Overview's height; its width follows the Route's shape."""
+    """The Overview's height in its `map` look; its width follows the Route's shape."""
+    overview_route_height: Size = 0.20
+    """The Overview's height in its `route` look: smaller, as the Route floats on its own without a surface to hold
+    it."""
     overview_aspect: tuple[Size, Size] = (0.7, 1.8)
     """Narrowest and widest width-to-height ratio, within which the Overview takes the Route's shape."""
     overview_padding: Proportion = 0.08

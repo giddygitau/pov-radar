@@ -327,8 +327,8 @@ def test_inspect_draws_a_preview_of_the_overview_at_4k_proportions(
     preview = source.parent / "pov-radar" / "GX0001" / "preview.png"
     assert f"Wrote {preview}" in output
     image = read_png(preview)
-    # 28% of 2160 high; a Ride due east is as wide as the Overview may be, 1.8 times its height.
-    assert image.shape == (605, 1089, 4)
+    # 20% of 2160 high in the route look; a Ride due east is as wide as the Overview may be, 1.8 times its height.
+    assert image.shape == (432, 778, 4)
     assert not _road_grey(image).any(), "drawn in the route look: no roads"
     assert (image[:, :, 1] > 200).any(), "but the Route is"
 
@@ -345,7 +345,7 @@ def test_inspect_draws_the_preview_as_a_map_in_the_map_look(
 
     assert code == 0, output
     image = read_png(source.parent / "pov-radar" / "GX0001" / "preview.png")
-    assert image.shape == (605, 1089, 4), "framed as in the route look"
+    assert image.shape == (605, 1089, 4), "28% of 2160 high in the map look"
     assert _road_grey(image).any(), "the fixture's roads are drawn"
 
 
@@ -603,7 +603,7 @@ def test_every_render_writes_the_placement_sidecar_and_the_attribution(
     # The Overview is 28% of 360 high, its width following the Route's shape, in the top-left corner.
     assert overview.file == "overview.mov"
     assert (overview.placement.corner, overview.placement.x, overview.placement.y) == ("top-left", 11, 11)
-    assert overview.placement.height == 101 and 0.7 * 101 <= overview.placement.width <= 1.8 * 101
+    assert overview.placement.height == 72 and 0.7 * 72 <= overview.placement.width <= 1.8 * 72, "20% of 360"
     assert record.time_offset == 0.0
     assert record.version == "0.1.0"
     assert record.map is None, "the rider declined the download"
