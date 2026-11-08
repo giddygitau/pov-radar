@@ -349,6 +349,21 @@ def test_inspect_draws_the_preview_as_a_map_in_the_map_look(
     assert _road_grey(image).any(), "the fixture's roads are drawn"
 
 
+def test_inspect_draws_the_preview_in_the_chosen_theme(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, map_cache: Path
+) -> None:
+    source = ride_on_the_fixture_roads(tmp_path, monkeypatch)
+    assert runner.invoke(app, ["maps", "update"]).exit_code == 0
+
+    code, output = inspect(source, "--theme", "amber")
+
+    assert code == 0, output
+    image = read_png(source.parent / "pov-radar" / "GX0001" / "preview.png").astype(int)
+    red, green, blue = image[:, :, 0], image[:, :, 1], image[:, :, 2]
+    assert ((red > 240) & (abs(green - 0xB0) < 12) & (blue < 30)).any(), "the Route in amber"
+    assert not ((red < 30) & (green > 200) & (blue > 240)).any(), "and nowhere in cyan"
+
+
 def _road_grey(image: NDArray[np.uint8]) -> NDArray[np.bool_]:
     """Where a road's grey, or the surface's, shows: not the Route's cyan, nor its casing's transparent black."""
     return (image[:, :, 3] > 0) & (image[:, :, 0] > 40) & (np.abs(image[:, :, 0].astype(int) - image[:, :, 2]) < 30)
@@ -646,6 +661,22 @@ def test_options_override_the_config_file_which_overrides_the_defaults(
     assert record.time_offset == 0.25
     assert record.config["telemetry"]["max_gap"] == 0.75
     assert record.overlays["minimap"].placement.corner == "top-right"
+
+
+def test_the_theme_option_overrides_the_config_files_and_is_logged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, map_cache: Path
+) -> None:
+    source = rendering(tmp_path, monkeypatch)
+    config = tmp_path / "ride.yaml"
+    config.write_text("style:\n  theme: lime\n")
+
+    result = runner.invoke(
+        app, ["render", str(source), "--config", str(config), "--theme", "magenta", "--no-overview"], input="n\n"
+    )
+
+    assert result.exit_code == 0, result.output
+    logged = yaml.safe_load(result.output[result.output.index("\n") : result.output.index("GX0001:")])
+    assert (logged["style"]["theme"], logged["style"]["accent"]) == ("magenta", "#FF2D95FF")
 
 
 def test_the_time_offset_moves_the_telemetry_later_and_says_so(

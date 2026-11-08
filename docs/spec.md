@@ -93,7 +93,7 @@ Sizes are proportional to frame height so one config works at 1080p, 2.7K, and 4
 | View | ~250 m ahead of marker, slight forward bias | whole valid Route with padding |
 | Marker | white arrow | white dot |
 
-Style: Forza Horizon-like. Near-black translucent surface, grey roads, Upcoming route electric cyan `#00E5FF`, Completed route ~50% grey, marker always drawn on top. By default the Overview has no surface, roads or outline: the Route floats over the footage on a thin dark casing, so both its colours stay visible over bright sky.
+Style: Forza Horizon-like. Near-black translucent surface, grey roads, Upcoming route in the Accent of the chosen Theme (`cyan` `#00E5FF` by default; `amber`, `magenta`, `lime`, `violet`), Completed route ~50% grey tinted to suit it, marker always drawn on top. By default the Overview has no surface, roads or outline: the Route floats over the footage on a thin dark casing, so both its colours stay visible over bright sky.
 
 ## Output
 
@@ -128,4 +128,4 @@ Python 3.12, uv, Typer, pydantic, pyproj, pyosmium, NumPy, Shapely, skia-python,
 4. Minimap (Heading, rotation, follow).
 5. Transparent Overlay export and Composite.
 
-Later: caching beyond telemetry, diagnostics mode, multi-Recording Rides, adaptive zoom, speed/altitude readouts, themes, parallel rendering, a smaller Overlay codec than ProRes 4444, GPS from a phone or external receiver.
+Later: caching beyond telemetry, diagnostics mode, multi-Recording Rides, adaptive zoom, speed/altitude readouts, parallel rendering, a smaller Overlay codec than ProRes 4444, GPS from a phone or external receiver.

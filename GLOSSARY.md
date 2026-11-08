@@ -68,6 +68,10 @@ _Avoid_: Future route, remaining route, next route
 The colour of the Upcoming route, and of the glow beneath it.
 _Avoid_: Highlight colour, route colour, upcoming colour
 
+**Theme**:
+A named Accent with a Completed route colour to suit it, picked for both Overlays at once.
+_Avoid_: Palette, skin, colour scheme
+
 **Heading**:
 The motorcycle's direction of travel, derived from movement since the camera does not record one.
 _Avoid_: Bearing, course, orientation

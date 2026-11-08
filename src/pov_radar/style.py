@@ -4,7 +4,7 @@ Sizes are fractions of the video frame's height, so one Style suits 1080p, 2.7K 
 """
 
 import re
-from typing import Annotated, Literal, Self
+from typing import Annotated, Any, Literal, Self, cast
 
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, PlainSerializer, model_validator
@@ -43,6 +43,22 @@ Look = Literal["route", "map"]
 a dark surface in a rounded rectangle."""
 
 
+ThemeName = Literal["cyan", "amber", "magenta", "lime", "violet"]
+"""A Theme: a named Accent with a Completed route colour to suit it."""
+
+THEMES: dict[str, dict[str, str]] = {
+    "cyan": {"accent": "#00E5FF", "completed": "#808080"},
+    "amber": {"accent": "#FFB000", "completed": "#8C8274"},
+    "magenta": {"accent": "#FF2D95", "completed": "#8C7A84"},
+    "lime": {"accent": "#A6FF00", "completed": "#828C78"},
+    "violet": {"accent": "#9D6BFF", "completed": "#827E8E"},
+}
+"""Each Theme's colours, filling those of the Style not set explicitly."""
+
+THEMED = set(THEMES["cyan"])
+"""The settings of the Style a Theme fills."""
+
+
 class RoadStyle(BaseModel, frozen=True, extra="forbid"):
     """How one class of road is drawn."""
 
@@ -56,6 +72,8 @@ class Style(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    theme: ThemeName = "cyan"
+    """Sets `accent` and `completed`, unless they are set themselves."""
     surface: Colour = (10, 12, 16, 212)
     """The near-black surface the map is drawn on; opaque enough that busy footage doesn't show through."""
     ring: Colour = (255, 255, 255, 70)
@@ -136,6 +154,15 @@ class Style(BaseModel):
     """Height of the credit's capitals, and its gap from the Overview's edges; smaller if the Overview is too narrow
     for it."""
     overview_credit_typeface: str = "Helvetica"
+
+    @model_validator(mode="before")
+    @classmethod
+    def _themed(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        settings = cast(dict[str, Any], data)
+        colours = THEMES.get(settings.get("theme", "cyan"), {})
+        return {**colours, **settings}
 
     @model_validator(mode="after")
     def _narrowest_first(self) -> Self:

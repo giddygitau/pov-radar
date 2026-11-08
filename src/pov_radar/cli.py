@@ -22,6 +22,7 @@ from pov_radar.overview import Overview
 from pov_radar.placement import Placement, PlacementError, in_frame, place
 from pov_radar.maps import ATTRIBUTION
 from pov_radar.roads import MapData, RoadClass, RoadNetwork
+from pov_radar.style import ThemeName
 from pov_radar.video import OverlayWriter, PlacedOverlay, VideoError, composite, read_frames
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
@@ -181,6 +182,12 @@ Attribution = Annotated[
         help=f"Credit OpenStreetMap in ATTRIBUTION.txt only, or burn it into the Overview too {_FROM_CONFIG}",
     ),
 ]
+Theme = Annotated[
+    ThemeName | None,
+    typer.Option(
+        help=f"The Theme: the Accent the Upcoming route is drawn in, with a Completed route to suit it {_FROM_CONFIG}"
+    ),
+]
 
 
 @app.command()
@@ -191,10 +198,11 @@ def inspect(
     max_speed: MaxSpeed = None,
     max_gap: MaxGap = None,
     time_offset: TimeOffset = None,
+    theme: Theme = None,
 ) -> None:
     """Summarise each Ride's GPS telemetry and write its telemetry.json, route.geojson and an Overview preview.png."""
     telemetry = {"max_speed": max_speed, "max_gap": max_gap, "time_offset": time_offset}
-    settings = _config(config, {"telemetry": telemetry})
+    settings = _config(config, {"telemetry": telemetry, "style": {"theme": theme}})
     _each_ride(sources, out, settings, lambda recording, folder, inspected: True)
 
 
@@ -211,6 +219,7 @@ def render(
     heading_min_speed: HeadingMinSpeed = None,
     full_frame: FullFrame = None,
     attribution: Attribution = None,
+    theme: Theme = None,
     overview: Annotated[bool, typer.Option(help="Render overview.mov")] = True,
     minimap: Annotated[bool, typer.Option(help="Render minimap.mov")] = True,
     with_composite: Annotated[
@@ -240,6 +249,7 @@ def render(
         "heading": {"window": heading_window, "min_speed": heading_min_speed},
         "full_frame": full_frame,
         "attribution": attribution,
+        "style": {"theme": theme},
         "composite": {"preset": FAST_PRESET if fast else None},
     }
     settings = _config(config, options, log=True)

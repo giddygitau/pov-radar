@@ -122,3 +122,47 @@ def test_a_bad_option_is_an_error_naming_the_option() -> None:
 def test_a_named_config_file_that_is_missing_is_an_error(tmp_path: Path) -> None:
     with pytest.raises(ConfigError, match="no such file"):
         load_config(tmp_path / "missing.yaml")
+
+
+def test_a_theme_sets_the_accent_and_the_completed_colour(tmp_path: Path) -> None:
+    style = load_config(written(tmp_path, "style:\n  theme: amber\n")).style
+
+    assert style.accent == (0xFF, 0xB0, 0x00, 255)
+    assert style.completed != Config().style.completed, "a grey tinted to suit the Accent"
+    assert style.marker == Config().style.marker and style.surface == Config().style.surface, "nothing else changes"
+
+
+def test_the_default_theme_is_cyan_with_a_neutral_completed_route() -> None:
+    style = Config().style
+
+    assert style.theme == "cyan"
+    assert style.accent == (0x00, 0xE5, 0xFF, 255) and style.completed == (128, 128, 128, 255)
+
+
+def test_a_colour_set_explicitly_wins_over_the_theme(tmp_path: Path) -> None:
+    style = load_config(written(tmp_path, 'style:\n  theme: amber\n  completed: "#404040"\n')).style
+
+    assert style.completed == (0x40, 0x40, 0x40, 255)
+    assert style.accent == (0xFF, 0xB0, 0x00, 255), "the colour left unset still from the Theme"
+
+
+def test_an_option_theme_overrides_the_file_theme_but_not_the_file_colours(tmp_path: Path) -> None:
+    path = written(tmp_path, 'style:\n  theme: amber\n  accent: "#123456"\n')
+    violet = load_config(None, {"style": {"theme": "violet"}}).style
+
+    style = load_config(path, {"style": {"theme": "violet"}}).style
+
+    assert style.theme == "violet" and style.completed == violet.completed
+    assert style.accent == (0x12, 0x34, 0x56, 255), "set explicitly in the file"
+
+
+@pytest.mark.parametrize("source", ["file", "option"])
+def test_an_unknown_theme_is_an_error_listing_the_themes(tmp_path: Path, source: str) -> None:
+    with pytest.raises(ConfigError) as raised:
+        if source == "file":
+            load_config(written(tmp_path, "style:\n  theme: teal\n"))
+        else:
+            load_config(None, {"style": {"theme": "teal"}})
+
+    assert "style.theme" in str(raised.value)
+    assert all(name in str(raised.value) for name in ("cyan", "amber", "magenta", "lime", "violet"))
