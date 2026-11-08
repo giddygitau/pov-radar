@@ -156,6 +156,20 @@ def test_an_option_theme_overrides_the_file_theme_but_not_the_file_colours(tmp_p
     assert style.accent == (0x12, 0x34, 0x56, 255), "set explicitly in the file"
 
 
+@pytest.mark.parametrize("accent", ['"#FF6A00CC"', "[255, 106, 0, 255]", "orange"])
+def test_the_accent_is_only_ever_an_opaque_hex_colour(tmp_path: Path, accent: str) -> None:
+    with pytest.raises(ConfigError, match="style.accent: .*#RRGGBB"):
+        load_config(written(tmp_path, f"style:\n  accent: {accent}\n"))
+
+
+def test_an_accent_keeps_the_themes_completed_colour_and_is_written_as_it_was_given() -> None:
+    config = load_config(None, {"style": {"theme": "amber", "accent": "#ff6a00"}})
+
+    assert config.style.accent == (0xFF, 0x6A, 0x00, 255)
+    assert config.style.completed == load_config(None, {"style": {"theme": "amber"}}).style.completed
+    assert config.dumped()["style"]["accent"] == "#FF6A00"
+
+
 @pytest.mark.parametrize("source", ["file", "option"])
 def test_an_unknown_theme_is_an_error_listing_the_themes(tmp_path: Path, source: str) -> None:
     with pytest.raises(ConfigError) as raised:

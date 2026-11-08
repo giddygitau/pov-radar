@@ -26,11 +26,29 @@ def _to_hex(colour: tuple[int, int, int, int]) -> str:
     return "#" + "".join(f"{channel:02X}" for channel in colour)
 
 
+def _to_opaque_hex(colour: tuple[int, int, int, int]) -> str:
+    return _to_hex(colour)[:7]
+
+
 Byte = Annotated[int, Field(ge=0, le=255)]
 """One channel of a colour, or an opacity."""
 
 Colour = Annotated[tuple[Byte, Byte, Byte, Byte], BeforeValidator(_from_hex), PlainSerializer(_to_hex)]
 """Red, green, blue and alpha, 0–255; written `#RRGGBB` or `#RRGGBBAA` in a config file."""
+
+def _from_opaque_hex(value: object) -> object:
+    """`#RRGGBB` as red, green, blue and full alpha; nothing else."""
+    if not isinstance(value, str) or not re.fullmatch(r"#[0-9A-Fa-f]{6}", value):
+        raise ValueError("the Accent is #RRGGBB in hex")
+    return _from_hex(value)
+
+
+Accent = Annotated[
+    tuple[Byte, Byte, Byte, Byte],
+    BeforeValidator(_from_opaque_hex),
+    PlainSerializer(_to_opaque_hex),
+]
+"""An opaque colour; written `#RRGGBB` in a config file."""
 
 Size = Annotated[float, Field(gt=0)]
 """A positive fraction of the frame's height, or a ratio."""
@@ -87,7 +105,7 @@ class Style(BaseModel):
         }
     )
     """Drawn in this order, faintest first."""
-    accent: Colour = (0x00, 0xE5, 0xFF, 255)
+    accent: Accent = (0x00, 0xE5, 0xFF, 255)
     """The Accent: the colour of the Upcoming route, and of its glow."""
     completed: Colour = (128, 128, 128, 255)
     """The muted grey of the Completed route."""

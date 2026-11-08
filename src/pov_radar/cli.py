@@ -188,6 +188,15 @@ Theme = Annotated[
         help=f"The Theme: the Accent the Upcoming route is drawn in, with a Completed route to suit it {_FROM_CONFIG}"
     ),
 ]
+Accent = Annotated[
+    str | None,
+    typer.Option(
+        "--accent",
+        metavar="#RRGGBB",
+        help=f"The Accent the Upcoming route is drawn in, instead of the Theme's; the Completed route keeps the "
+        f"Theme's colour {_FROM_CONFIG}",
+    ),
+]
 
 
 @app.command()
@@ -199,10 +208,11 @@ def inspect(
     max_gap: MaxGap = None,
     time_offset: TimeOffset = None,
     theme: Theme = None,
+    accent: Accent = None,
 ) -> None:
     """Summarise each Ride's GPS telemetry and write its telemetry.json, route.geojson and an Overview preview.png."""
     telemetry = {"max_speed": max_speed, "max_gap": max_gap, "time_offset": time_offset}
-    settings = _config(config, {"telemetry": telemetry, "style": {"theme": theme}})
+    settings = _config(config, {"telemetry": telemetry, "style": {"theme": theme, "accent": accent}})
     _each_ride(sources, out, settings, lambda recording, folder, inspected: True)
 
 
@@ -220,6 +230,7 @@ def render(
     full_frame: FullFrame = None,
     attribution: Attribution = None,
     theme: Theme = None,
+    accent: Accent = None,
     overview: Annotated[bool, typer.Option(help="Render overview.mov")] = True,
     minimap: Annotated[bool, typer.Option(help="Render minimap.mov")] = True,
     with_composite: Annotated[
@@ -249,7 +260,7 @@ def render(
         "heading": {"window": heading_window, "min_speed": heading_min_speed},
         "full_frame": full_frame,
         "attribution": attribution,
-        "style": {"theme": theme},
+        "style": {"theme": theme, "accent": accent},
         "composite": {"preset": FAST_PRESET if fast else None},
     }
     settings = _config(config, options, log=True)

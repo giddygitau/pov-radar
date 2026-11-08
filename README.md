@@ -23,4 +23,7 @@ style:
   theme: amber
 ```
 
-A colour set under `style` itself, such as `completed`, wins over the Theme.
+For a colour of your own, give the Accent as `#RRGGBB` with `--accent "#FF6A00"` or `style.accent`; the Completed
+route keeps the Theme's grey. A colour set under `style` itself, such as `completed`, wins over the Theme.
+
+`style.accent` was `style.upcoming` before Themes; a config still using the old name is refused.
