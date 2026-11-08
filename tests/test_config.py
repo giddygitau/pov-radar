@@ -20,7 +20,7 @@ def test_with_no_file_and_no_options_the_built_in_defaults_apply(tmp_path: Path,
     assert config.minimap.corner == "bottom-right" and config.overview.corner == "top-left"
     assert config.minimap.margin == config.overview.margin == 0.03
     assert config.overview.look == "route", "just the Route and its dot"
-    assert config.style.upcoming == (0x00, 0xE5, 0xFF, 255)
+    assert config.style.accent == (0x00, 0xE5, 0xFF, 255)
     assert config.attribution == "file" and not config.full_frame
     assert str(config.composite.encoding()) == "libx265 -preset slow -crf 16, yuv420p10le"
 
@@ -35,7 +35,7 @@ telemetry:
 minimap:
   margin: 0.05
 style:
-  upcoming: "#FF8800"
+  accent: "#FF8800"
 """,
     )
 
@@ -45,7 +45,7 @@ style:
     assert config.telemetry.time_offset == -0.5, "the option wins over the file"
     assert config.full_frame, "from the option"
     assert config.minimap.margin == 0.05 and config.minimap.corner == "bottom-right", "the rest of the section kept"
-    assert config.style.upcoming == (0xFF, 0x88, 0x00, 255), "colours as hex, opaque unless given alpha"
+    assert config.style.accent == (0xFF, 0x88, 0x00, 255), "colours as hex"
     assert config.style.completed == Config().style.completed
     assert config.telemetry.max_speed == Config().telemetry.max_speed
 
@@ -82,8 +82,10 @@ def test_an_empty_file_is_the_defaults(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("text", "complaint"),
     [
-        ('style:\n  upcoming: "#00E5FG"\n', "style.upcoming"),
-        ("style:\n  upcoming: [0, 300, 0, 255]\n", "style.upcoming"),
+        ('style:\n  accent: "#00E5FG"\n', "style.accent"),
+        ('style:\n  completed: "#00E5FG"\n', "style.completed"),
+        ("style:\n  completed: [0, 300, 0, 255]\n", "style.completed"),
+        ('style:\n  upcoming: "#00E5FF"\n', "style.upcoming"),
         ("minimap:\n  margin: -0.01\n", "minimap.margin"),
         ("minimap:\n  corner: middle\n", "minimap.corner"),
         ("overview:\n  look: satellite\n", "overview.look"),

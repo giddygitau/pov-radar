@@ -69,12 +69,12 @@ class Style(BaseModel):
         }
     )
     """Drawn in this order, faintest first."""
-    upcoming: Colour = (0x00, 0xE5, 0xFF, 255)
-    """The accent colour of the Upcoming route."""
+    accent: Colour = (0x00, 0xE5, 0xFF, 255)
+    """The Accent: the colour of the Upcoming route, and of its glow."""
     completed: Colour = (128, 128, 128, 255)
     """The muted grey of the Completed route."""
     upcoming_glow_alpha: Byte = 110
-    """Opacity, 0–255, of the soft glow in the accent colour beneath the Upcoming route."""
+    """Opacity, 0–255, of the soft glow in the Accent beneath the Upcoming route."""
     upcoming_glow_scale: Size = 2.2
     """Width of the glow beneath the Upcoming route, relative to the route's."""
     marker: Colour = (255, 255, 255, 255)

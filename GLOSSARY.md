@@ -61,8 +61,12 @@ The part of the Route from the start of the Ride up to the Split point, drawn mu
 _Avoid_: Past route, travelled route, history
 
 **Upcoming route**:
-The part of the Route from the Split point to the end of the Ride, drawn in the accent colour.
+The part of the Route from the Split point to the end of the Ride, drawn in the Accent.
 _Avoid_: Future route, remaining route, next route
+
+**Accent**:
+The colour of the Upcoming route, and of the glow beneath it.
+_Avoid_: Highlight colour, route colour, upcoming colour
 
 **Heading**:
 The motorcycle's direction of travel, derived from movement since the camera does not record one.
