@@ -133,7 +133,7 @@ class Overview:
         canvas.drawString(CREDIT, x, self.height - gap, font, fill(s.overview_credit))
 
     def _draw_route(self, canvas: Any, completed: NDArray[np.float64], upcoming: NDArray[np.float64]) -> None:
-        """The Completed route muted, beneath the Upcoming route in the accent colour with its glow; in pixels, and
+        """The Completed route muted, beneath the Upcoming route in the Accent with its glow; in pixels, and
         within the rounded rectangle in the `map` look."""
         s, h = self.style, self.frame_height
         canvas.save()

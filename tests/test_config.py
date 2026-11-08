@@ -20,7 +20,7 @@ def test_with_no_file_and_no_options_the_built_in_defaults_apply(tmp_path: Path,
     assert config.minimap.corner == "bottom-right" and config.overview.corner == "top-left"
     assert config.minimap.margin == config.overview.margin == 0.03
     assert config.overview.look == "route", "just the Route and its dot"
-    assert config.style.upcoming == (0x00, 0xE5, 0xFF, 255)
+    assert config.style.accent == (0x00, 0xE5, 0xFF, 255)
     assert config.attribution == "file" and not config.full_frame
     assert str(config.composite.encoding()) == "libx265 -preset slow -crf 16, yuv420p10le"
 
@@ -35,7 +35,7 @@ telemetry:
 minimap:
   margin: 0.05
 style:
-  upcoming: "#FF8800"
+  accent: "#FF8800"
 """,
     )
 
@@ -45,7 +45,7 @@ style:
     assert config.telemetry.time_offset == -0.5, "the option wins over the file"
     assert config.full_frame, "from the option"
     assert config.minimap.margin == 0.05 and config.minimap.corner == "bottom-right", "the rest of the section kept"
-    assert config.style.upcoming == (0xFF, 0x88, 0x00, 255), "colours as hex, opaque unless given alpha"
+    assert config.style.accent == (0xFF, 0x88, 0x00, 255), "colours as hex"
     assert config.style.completed == Config().style.completed
     assert config.telemetry.max_speed == Config().telemetry.max_speed
 
@@ -82,8 +82,10 @@ def test_an_empty_file_is_the_defaults(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("text", "complaint"),
     [
-        ('style:\n  upcoming: "#00E5FG"\n', "style.upcoming"),
-        ("style:\n  upcoming: [0, 300, 0, 255]\n", "style.upcoming"),
+        ('style:\n  accent: "#00E5FG"\n', "style.accent"),
+        ('style:\n  completed: "#00E5FG"\n', "style.completed"),
+        ("style:\n  completed: [0, 300, 0, 255]\n", "style.completed"),
+        ('style:\n  upcoming: "#00E5FF"\n', "style.upcoming"),
         ("minimap:\n  margin: -0.01\n", "minimap.margin"),
         ("minimap:\n  corner: middle\n", "minimap.corner"),
         ("overview:\n  look: satellite\n", "overview.look"),
@@ -120,3 +122,61 @@ def test_a_bad_option_is_an_error_naming_the_option() -> None:
 def test_a_named_config_file_that_is_missing_is_an_error(tmp_path: Path) -> None:
     with pytest.raises(ConfigError, match="no such file"):
         load_config(tmp_path / "missing.yaml")
+
+
+def test_a_theme_sets_the_accent_and_the_completed_colour(tmp_path: Path) -> None:
+    style = load_config(written(tmp_path, "style:\n  theme: amber\n")).style
+
+    assert style.accent == (0xFF, 0xB0, 0x00, 255)
+    assert style.completed != Config().style.completed, "a grey tinted to suit the Accent"
+    assert style.marker == Config().style.marker and style.surface == Config().style.surface, "nothing else changes"
+
+
+def test_the_default_theme_is_cyan_with_a_neutral_completed_route() -> None:
+    style = Config().style
+
+    assert style.theme == "cyan"
+    assert style.accent == (0x00, 0xE5, 0xFF, 255) and style.completed == (128, 128, 128, 255)
+
+
+def test_a_colour_set_explicitly_wins_over_the_theme(tmp_path: Path) -> None:
+    style = load_config(written(tmp_path, 'style:\n  theme: amber\n  completed: "#404040"\n')).style
+
+    assert style.completed == (0x40, 0x40, 0x40, 255)
+    assert style.accent == (0xFF, 0xB0, 0x00, 255), "the colour left unset still from the Theme"
+
+
+def test_an_option_theme_overrides_the_file_theme_but_not_the_file_colours(tmp_path: Path) -> None:
+    path = written(tmp_path, 'style:\n  theme: amber\n  accent: "#123456"\n')
+    violet = load_config(None, {"style": {"theme": "violet"}}).style
+
+    style = load_config(path, {"style": {"theme": "violet"}}).style
+
+    assert style.theme == "violet" and style.completed == violet.completed
+    assert style.accent == (0x12, 0x34, 0x56, 255), "set explicitly in the file"
+
+
+@pytest.mark.parametrize("accent", ['"#FF6A00CC"', "[255, 106, 0, 255]", "orange"])
+def test_the_accent_is_only_ever_an_opaque_hex_colour(tmp_path: Path, accent: str) -> None:
+    with pytest.raises(ConfigError, match="style.accent: .*#RRGGBB"):
+        load_config(written(tmp_path, f"style:\n  accent: {accent}\n"))
+
+
+def test_an_accent_keeps_the_themes_completed_colour_and_is_written_as_it_was_given() -> None:
+    config = load_config(None, {"style": {"theme": "amber", "accent": "#ff6a00"}})
+
+    assert config.style.accent == (0xFF, 0x6A, 0x00, 255)
+    assert config.style.completed == load_config(None, {"style": {"theme": "amber"}}).style.completed
+    assert config.dumped()["style"]["accent"] == "#FF6A00"
+
+
+@pytest.mark.parametrize("source", ["file", "option"])
+def test_an_unknown_theme_is_an_error_listing_the_themes(tmp_path: Path, source: str) -> None:
+    with pytest.raises(ConfigError) as raised:
+        if source == "file":
+            load_config(written(tmp_path, "style:\n  theme: teal\n"))
+        else:
+            load_config(None, {"style": {"theme": "teal"}})
+
+    assert "style.theme" in str(raised.value)
+    assert all(name in str(raised.value) for name in ("cyan", "amber", "magenta", "lime", "violet"))

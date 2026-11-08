@@ -22,13 +22,13 @@ def draw_route(
     width: float,
     glow_blur: float,
 ) -> None:
-    """The Completed route muted, beneath the Upcoming route in the accent colour with its glow; `width` and
+    """The Completed route muted, beneath the Upcoming route in the Accent with its glow; `width` and
     `glow_blur` in the canvas's units."""
-    glow = (*style.upcoming[:3], style.upcoming_glow_alpha)
+    glow = (*style.accent[:3], style.upcoming_glow_alpha)
     ahead = path(upcoming)
     canvas.drawPath(path(completed), stroke(style.completed, width))
     canvas.drawPath(ahead, stroke(glow, width * style.upcoming_glow_scale, blur=glow_blur))
-    canvas.drawPath(ahead, stroke(style.upcoming, width))
+    canvas.drawPath(ahead, stroke(style.accent, width))
 
 
 def draw_dot(canvas: Any, style: Style, x: float, y: float, radius: float, halo: float, visibility: Visibility) -> None:

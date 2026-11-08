@@ -3,8 +3,9 @@
 Sizes are fractions of the video frame's height, so one Style suits 1080p, 2.7K and 4K.
 """
 
+import math
 import re
-from typing import Annotated, Literal, Self
+from typing import Annotated, Any, Literal, Self, cast
 
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, PlainSerializer, model_validator
@@ -26,11 +27,30 @@ def _to_hex(colour: tuple[int, int, int, int]) -> str:
     return "#" + "".join(f"{channel:02X}" for channel in colour)
 
 
+def _to_opaque_hex(colour: tuple[int, int, int, int]) -> str:
+    return _to_hex(colour)[:7]
+
+
 Byte = Annotated[int, Field(ge=0, le=255)]
 """One channel of a colour, or an opacity."""
 
 Colour = Annotated[tuple[Byte, Byte, Byte, Byte], BeforeValidator(_from_hex), PlainSerializer(_to_hex)]
 """Red, green, blue and alpha, 0–255; written `#RRGGBB` or `#RRGGBBAA` in a config file."""
+
+
+def _from_opaque_hex(value: object) -> object:
+    """`#RRGGBB` as red, green, blue and full alpha; nothing else."""
+    if not isinstance(value, str) or not re.fullmatch(r"#[0-9A-Fa-f]{6}", value):
+        raise ValueError("the Accent is #RRGGBB in hex")
+    return _from_hex(value)
+
+
+Accent = Annotated[
+    tuple[Byte, Byte, Byte, Byte],
+    BeforeValidator(_from_opaque_hex),
+    PlainSerializer(_to_opaque_hex),
+]
+"""An opaque colour; written `#RRGGBB` in a config file."""
 
 Size = Annotated[float, Field(gt=0)]
 """A positive fraction of the frame's height, or a ratio."""
@@ -41,6 +61,32 @@ Proportion = Annotated[float, Field(ge=0, le=1)]
 Look = Literal["route", "map"]
 """How the Overview is drawn: `route`, just the Route and its dot over the footage; `map`, over the Road network on
 a dark surface in a rounded rectangle."""
+
+
+ThemeName = Literal["cyan", "amber", "magenta", "lime", "violet"]
+"""A Theme: a named Accent with a Completed route colour to suit it."""
+
+THEMES: dict[ThemeName, dict[str, str]] = {
+    "cyan": {"accent": "#00E5FF", "completed": "#808080"},
+    "amber": {"accent": "#FFB000", "completed": "#8C8274"},
+    "magenta": {"accent": "#FF2D95", "completed": "#8C7A84"},
+    "lime": {"accent": "#A6FF00", "completed": "#828C78"},
+    "violet": {"accent": "#9D6BFF", "completed": "#827E8E"},
+}
+"""Each Theme's colours, filling those of the Style not set explicitly."""
+
+THEMED = set(THEMES["cyan"])
+"""The settings of the Style a Theme fills."""
+
+
+MIN_ROUTE_DIFFERENCE = 60
+"""How far apart, in red, green and blue from 0 to 255, the Accent and the Completed route's colour must be."""
+
+
+def _luminance(colour: tuple[int, int, int, int]) -> float:
+    """Relative luminance, as WCAG defines it."""
+    linear = [c / 255 / 12.92 if c <= 10 else ((c / 255 + 0.055) / 1.055) ** 2.4 for c in colour[:3]]
+    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
 
 
 class RoadStyle(BaseModel, frozen=True, extra="forbid"):
@@ -56,6 +102,8 @@ class Style(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    theme: ThemeName = "cyan"
+    """Sets `accent` and `completed`, unless they are set themselves."""
     surface: Colour = (10, 12, 16, 212)
     """The near-black surface the map is drawn on; opaque enough that busy footage doesn't show through."""
     ring: Colour = (255, 255, 255, 70)
@@ -69,12 +117,12 @@ class Style(BaseModel):
         }
     )
     """Drawn in this order, faintest first."""
-    upcoming: Colour = (0x00, 0xE5, 0xFF, 255)
-    """The accent colour of the Upcoming route."""
+    accent: Accent = (0x00, 0xE5, 0xFF, 255)
+    """The Accent: the colour of the Upcoming route, and of its glow."""
     completed: Colour = (128, 128, 128, 255)
     """The muted grey of the Completed route."""
     upcoming_glow_alpha: Byte = 110
-    """Opacity, 0–255, of the soft glow in the accent colour beneath the Upcoming route."""
+    """Opacity, 0–255, of the soft glow in the Accent beneath the Upcoming route."""
     upcoming_glow_scale: Size = 2.2
     """Width of the glow beneath the Upcoming route, relative to the route's."""
     marker: Colour = (255, 255, 255, 255)
@@ -136,6 +184,28 @@ class Style(BaseModel):
     """Height of the credit's capitals, and its gap from the Overview's edges; smaller if the Overview is too narrow
     for it."""
     overview_credit_typeface: str = "Helvetica"
+
+    @model_validator(mode="before")
+    @classmethod
+    def _themed(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        settings = cast(dict[str, Any], data)
+        colours = THEMES.get(settings.get("theme", "cyan"), {})
+        return {**colours, **settings}
+
+    def hard_to_see(self) -> str | None:
+        """Why an Accent other than the Theme's would be hard to see, if it would: too close to the Completed
+        route's colour, or below the 3:1 contrast WCAG asks of graphics against the surface."""
+        accent = _to_opaque_hex(self.accent)
+        if accent == THEMES[self.theme]["accent"]:
+            return None
+        if math.dist(self.accent[:3], self.completed[:3]) < MIN_ROUTE_DIFFERENCE:
+            completed = _to_opaque_hex(self.completed)
+            return f"the Accent {accent} is too close to the Completed route's {completed} to tell them apart"
+        if (_luminance(self.accent) + 0.05) / (_luminance(self.surface) + 0.05) < 3:
+            return f"the Accent {accent} is too dark to see against the dark ground beneath the Route"
+        return None
 
     @model_validator(mode="after")
     def _narrowest_first(self) -> Self:

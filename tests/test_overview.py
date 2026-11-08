@@ -7,6 +7,7 @@ from numpy.typing import NDArray
 from pov_radar.overview import Overview
 from pov_radar.ride import Ride, join
 from pov_radar.roads import RoadClass, RoadNetwork
+from pov_radar.style import Style
 from synthetic import FRAME_HEIGHT, along, assert_matches_golden, is_completed, is_upcoming, ride, roads, sample
 
 
@@ -229,6 +230,20 @@ def test_the_route_look_splits_the_route_at_the_dot(request: pytest.FixtureReque
     expected = {(0.5, 0.5): COMPLETED, (1.0, 0.2): UPCOMING}
     assert {point: colours_at(image, *point) for point in expected} == expected
     assert_matches_golden(image, "route-split-crossing", request)
+
+
+def test_a_theme_draws_the_upcoming_route_in_its_accent_and_tints_the_completed_route(
+    request: pytest.FixtureRequest,
+) -> None:
+    amber = Style(theme="amber")
+    image = Overview(CROSSING, FRAME_HEIGHT, amber, look="route").frames(RoadNetwork([]))(CROSSING.at(120.0))
+
+    row = _square_pixels(image.shape[0], 1.8, 1.8).start
+    column = _square_pixels(image.shape[1], 1.0, 1.0).start
+    patch = image[row - 2 : row + 3, column - 2 : column + 3].reshape(-1, 4).astype(int)
+    assert any(r > 240 and abs(g - 0xB0) < 12 and b < 30 for r, g, b, _ in patch), "the Upcoming route in amber"
+    assert colours_at(image, 1.0, 0.2) == (False, False), "not in the default cyan"
+    assert_matches_golden(image, "route-split-crossing-amber", request)
 
 
 def test_the_route_look_dims_the_dot_in_a_fix_gap(request: pytest.FixtureRequest) -> None:

@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from pov_radar.placement import Corner
 from pov_radar.ride import KMH_PER_MS, MAX_GAP, MAX_INTERPOLATED_GAP, MAX_SPEED, HeadingSmoothing
 from pov_radar.roads import MINIMAP_REACH
-from pov_radar.style import Look, Style
+from pov_radar.style import THEMED, Look, Style
 from pov_radar.video import Encoding
 
 DEFAULT_PATH = Path("config.yaml")
@@ -121,11 +121,15 @@ class Config(_Section):
 
 def load_config(path: Path | None, options: Mapping[str, Any] | None = None) -> Config:
     """The built-in defaults, overridden by the YAML file at `path` (or `config.yaml` in the working directory, if
-    there is one), overridden by `options`, nested as in the file; options set to None are left out."""
-    settings = Config().dumped()
+    there is one), overridden by `options`, nested as in the file; options set to None are left out.
+
+    The colours a Theme fills are left out of the defaults merged over, so it can tell them from those set
+    explicitly."""
+    settings = Config().model_dump(mode="json", exclude={"style": THEMED})
     path = config_file(path)
     if path is not None:
-        settings = _validated(_merged(settings, _read(path)), str(path)).dumped()
+        settings = _merged(settings, _read(path))
+        _validated(settings, str(path))
     return _validated(_merged(settings, given(options or {})), "options")
 
 
