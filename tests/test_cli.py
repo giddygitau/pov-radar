@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import time
 from pathlib import Path
+from typing import get_args
 
 import numpy as np
 import pytest
@@ -20,6 +21,7 @@ from pov_radar.drawing import read_png
 from pov_radar.placement import Placement
 from pov_radar.ride import Ride, Sample
 from pov_radar.roads import MapData
+from pov_radar.style import ThemeName
 
 runner = CliRunner()
 
@@ -378,6 +380,39 @@ def test_inspect_draws_the_preview_in_a_custom_accent(
     assert ((red > 240) & (green < 30) & (blue > 240)).any(), "the Route in the Accent given"
 
 
+@pytest.mark.parametrize(
+    ("accent", "warning"),
+    [
+        ("#808080", "Warning: the Accent #808080 is too close to the Completed route's #808080 to tell them apart"),
+        ("#101010", "Warning: the Accent #101010 is too dark to see against the map's surface"),
+    ],
+)
+def test_an_accent_hard_to_see_is_warned_of_but_drawn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, map_cache: Path, accent: str, warning: str
+) -> None:
+    source = ride_on_the_fixture_roads(tmp_path, monkeypatch)
+    assert runner.invoke(app, ["maps", "update"]).exit_code == 0
+
+    code, output = inspect(source, "--accent", accent)
+
+    assert code == 0, output
+    assert warning in output
+    assert (source.parent / "pov-radar" / "GX0001" / "preview.png").exists()
+
+
+@pytest.mark.parametrize("args", [["--accent", "#FF6A00"], *(["--theme", theme] for theme in get_args(ThemeName))])
+def test_an_accent_easy_to_see_and_every_theme_are_not_warned_of(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, map_cache: Path, args: list[str]
+) -> None:
+    source = ride_on_the_fixture_roads(tmp_path, monkeypatch)
+    assert runner.invoke(app, ["maps", "update"]).exit_code == 0
+
+    code, output = inspect(source, *args)
+
+    assert code == 0, output
+    assert "Warning" not in output
+
+
 def _road_grey(image: NDArray[np.uint8]) -> NDArray[np.bool_]:
     """Where a road's grey, or the surface's, shows: not the Route's cyan, nor its casing's transparent black."""
     return (image[:, :, 3] > 0) & (image[:, :, 0] > 40) & (np.abs(image[:, :, 0].astype(int) - image[:, :, 2]) < 30)
@@ -707,6 +742,18 @@ def test_the_accent_option_overrides_the_config_files_and_is_logged(
     assert result.exit_code == 0, result.output
     logged = yaml.safe_load(result.output[result.output.index("\n") : result.output.index("GX0001:")])
     assert logged["style"]["accent"] == "#FF6A00"
+
+
+def test_render_warns_of_an_accent_hard_to_see_after_the_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, map_cache: Path
+) -> None:
+    source = rendering(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["render", str(source), "--accent", "#101010", "--no-overview"], input="n\n")
+
+    assert result.exit_code == 0, result.output
+    logged = result.output[: result.output.index("GX0001:")]
+    assert "Warning: the Accent #101010 is too dark" in logged.splitlines()[-1]
 
 
 def test_the_time_offset_moves_the_telemetry_later_and_says_so(

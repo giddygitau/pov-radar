@@ -3,6 +3,7 @@
 Sizes are fractions of the video frame's height, so one Style suits 1080p, 2.7K and 4K.
 """
 
+import math
 import re
 from typing import Annotated, Any, Literal, Self, cast
 
@@ -75,6 +76,16 @@ THEMES: dict[str, dict[str, str]] = {
 
 THEMED = set(THEMES["cyan"])
 """The settings of the Style a Theme fills."""
+
+
+MIN_ROUTE_DIFFERENCE = 60
+"""How far apart, in red, green and blue from 0 to 255, the Accent and the Completed route's colour must be."""
+
+
+def _luminance(colour: tuple[int, int, int, int]) -> float:
+    """Relative luminance, as WCAG defines it."""
+    linear = [c / 255 / 12.92 if c <= 10 else ((c / 255 + 0.055) / 1.055) ** 2.4 for c in colour[:3]]
+    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
 
 
 class RoadStyle(BaseModel, frozen=True, extra="forbid"):
@@ -181,6 +192,19 @@ class Style(BaseModel):
         settings = cast(dict[str, Any], data)
         colours = THEMES.get(settings.get("theme", "cyan"), {})
         return {**colours, **settings}
+
+    def hard_to_see(self) -> str | None:
+        """Why an Accent other than the Theme's would be hard to see, if it would: too close to the Completed
+        route's colour, or below the 3:1 contrast WCAG asks of graphics against the surface."""
+        accent = _to_opaque_hex(self.accent)
+        if accent == THEMES[self.theme]["accent"]:
+            return None
+        if math.dist(self.accent[:3], self.completed[:3]) < MIN_ROUTE_DIFFERENCE:
+            completed = _to_opaque_hex(self.completed)
+            return f"the Accent {accent} is too close to the Completed route's {completed} to tell them apart"
+        if (_luminance(self.accent) + 0.05) / (_luminance(self.surface) + 0.05) < 3:
+            return f"the Accent {accent} is too dark to see against the map's surface"
+        return None
 
     @model_validator(mode="after")
     def _narrowest_first(self) -> Self:

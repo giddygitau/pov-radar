@@ -287,6 +287,8 @@ def _config(path: Path | None, options: dict[str, Any], log: bool = False) -> Co
         typer.echo(f"Config: {', '.join(sources)}")
         dumped = yaml.safe_dump(config.dumped(), sort_keys=False, allow_unicode=True)
         typer.echo("".join(f"  {line}\n" for line in dumped.splitlines()))
+    if problem := config.style.hard_to_see():
+        typer.echo(f"Warning: {problem}", err=True)
     return config
 
 
