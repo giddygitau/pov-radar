@@ -384,7 +384,7 @@ def test_inspect_draws_the_preview_in_a_custom_accent(
     ("accent", "warning"),
     [
         ("#808080", "Warning: the Accent #808080 is too close to the Completed route's #808080 to tell them apart"),
-        ("#101010", "Warning: the Accent #101010 is too dark to see against the map's surface"),
+        ("#101010", "Warning: the Accent #101010 is too dark to see against the dark ground beneath the Route"),
     ],
 )
 def test_an_accent_hard_to_see_is_warned_of_but_drawn(

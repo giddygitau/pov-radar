@@ -37,6 +37,7 @@ Byte = Annotated[int, Field(ge=0, le=255)]
 Colour = Annotated[tuple[Byte, Byte, Byte, Byte], BeforeValidator(_from_hex), PlainSerializer(_to_hex)]
 """Red, green, blue and alpha, 0–255; written `#RRGGBB` or `#RRGGBBAA` in a config file."""
 
+
 def _from_opaque_hex(value: object) -> object:
     """`#RRGGBB` as red, green, blue and full alpha; nothing else."""
     if not isinstance(value, str) or not re.fullmatch(r"#[0-9A-Fa-f]{6}", value):
@@ -65,7 +66,7 @@ a dark surface in a rounded rectangle."""
 ThemeName = Literal["cyan", "amber", "magenta", "lime", "violet"]
 """A Theme: a named Accent with a Completed route colour to suit it."""
 
-THEMES: dict[str, dict[str, str]] = {
+THEMES: dict[ThemeName, dict[str, str]] = {
     "cyan": {"accent": "#00E5FF", "completed": "#808080"},
     "amber": {"accent": "#FFB000", "completed": "#8C8274"},
     "magenta": {"accent": "#FF2D95", "completed": "#8C7A84"},
@@ -203,7 +204,7 @@ class Style(BaseModel):
             completed = _to_opaque_hex(self.completed)
             return f"the Accent {accent} is too close to the Completed route's {completed} to tell them apart"
         if (_luminance(self.accent) + 0.05) / (_luminance(self.surface) + 0.05) < 3:
-            return f"the Accent {accent} is too dark to see against the map's surface"
+            return f"the Accent {accent} is too dark to see against the dark ground beneath the Route"
         return None
 
     @model_validator(mode="after")
